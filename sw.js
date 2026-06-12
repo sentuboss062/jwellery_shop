@@ -1,4 +1,4 @@
-const CACHE_VERSION = "jewellery-portal-v1.1.0";
+const CACHE_VERSION = "jewellery-portal-v1.2.0";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -17,9 +17,8 @@ const APP_SHELL = [
   "/js/charts.js",
   "/js/storage-health.js",
   "/js/modules/dashboard.js",
+  "/js/modules/audit-log.js",
   "/js/modules/billing.js",
-  "/js/modules/gold-sales.js",
-  "/js/modules/silver-sales.js",
   "/js/modules/stock.js",
   "/js/modules/customers.js",
   "/js/modules/loans.js",

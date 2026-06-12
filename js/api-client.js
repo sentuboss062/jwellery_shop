@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "/.netlify/functions/api";
+const DEFAULT_API_BASE = "/api";
 
 let apiBase = DEFAULT_API_BASE;
 let apiAvailable = null;

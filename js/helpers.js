@@ -1,4 +1,14 @@
-export const APP_VERSION = "1.1.0";
+export const APP_VERSION = "1.2.0";
+
+export const GOLD_PURITY_OPTIONS = [
+  { label: "14K (58.3%)", value: 58.3 },
+  { label: "18K (75.0%)", value: 75 },
+  { label: "20K (83.3%)", value: 83.3 },
+  { label: "22K (91.6%)", value: 91.6 },
+  { label: "24K (99.9%)", value: 99.9 },
+  { label: "916 Hallmark", value: 91.6 },
+  { label: "750 Hallmark", value: 75 }
+];
 
 export const CDN_URLS = {
   jsPDF: "https://cdnjs.cloudflare.com/ajax/libs/jspdf/3.0.3/jspdf.umd.min.js",
@@ -165,6 +175,30 @@ export function getSequenceFromId(id) {
   return match ? Number(match[1]) : 0;
 }
 
+export function goldPurityOptionsHtml(selected) {
+  const numericSelected = num(selected, NaN);
+  const options = GOLD_PURITY_OPTIONS.map((option) => {
+    const isSelected = Number.isFinite(numericSelected) && Math.abs(numericSelected - option.value) < 0.001;
+    return `<option value="${option.value}" ${isSelected ? "selected" : ""}>${escapeHtml(option.label)}</option>`;
+  });
+  const customSelected = selected && !GOLD_PURITY_OPTIONS.some((option) => Math.abs(num(selected) - option.value) < 0.001);
+  options.push(`<option value="custom" ${customSelected ? "selected" : ""}>Custom...</option>`);
+  return options.join("");
+}
+
+export function parseGoldPurity(selectValue, customValue = "") {
+  if (selectValue === "custom") return num(customValue);
+  return num(selectValue);
+}
+
+export function displayPurity(value, metalType = "Gold") {
+  if (metalType === "Silver" || value === null || value === undefined || value === "") return "-";
+  const numeric = num(value, NaN);
+  if (!Number.isFinite(numeric)) return String(value);
+  const preset = GOLD_PURITY_OPTIONS.find((option) => Math.abs(option.value - numeric) < 0.001);
+  return preset ? preset.label : `${numeric}%`;
+}
+
 export function getBillStore(metalType) {
   return String(metalType).toLowerCase() === "silver" ? "silverBills" : "goldBills";
 }
@@ -228,8 +262,9 @@ export function calculateSaleTotals(input = {}) {
 
 export function calculateBillLine(input = {}) {
   const metalValue = roundMoney(num(input.weightGm) * num(input.ratePerGm));
-  const makingChargePct = num(input.makingChargePct ?? input.makingCharge);
-  const makingCharge = roundMoney((metalValue * makingChargePct) / 100);
+  const makingChargePct = num(input.makingChargePct ?? input.makingChargePercent);
+  const makingChargeRs = Math.max(0, Math.floor(num(input.makingChargeRs)));
+  const makingCharge = roundMoney((metalValue * makingChargePct) / 100 + makingChargeRs);
   const wastageCharge = roundMoney(num(input.wastageCharge));
   const discountAmt = roundMoney(num(input.discountAmt ?? input.discount));
   const taxable = Math.max(0, roundMoney(metalValue + makingCharge + wastageCharge - discountAmt));
@@ -239,6 +274,8 @@ export function calculateBillLine(input = {}) {
   return {
     metalValue,
     makingChargePct,
+    makingChargePercent: makingChargePct,
+    makingChargeRs,
     makingCharge,
     wastageCharge,
     discountAmt,
@@ -291,6 +328,8 @@ export function normalizeBillRecord(bill, items = null) {
     weightGm: num(bill.weightGm),
     ratePerGm: num(bill.ratePerGm),
     makingChargePct: bill.makingChargePct ?? 0,
+    makingChargePercent: bill.makingChargePct ?? 0,
+    makingChargeRs: bill.makingChargeRs ?? 0,
     makingCharge: num(bill.makingCharge),
     wastageCharge: num(bill.wastageCharge),
     discountAmt: num(bill.discountAmt),
@@ -314,20 +353,60 @@ export function normalizeBillRecord(bill, items = null) {
   };
 }
 
-export function calculateLoanInterest(loan, asOfDate = todayInputValue()) {
-  if (!loan) return 0;
+export function monthsBetween(start, end) {
+  const s = toDate(start);
+  const e = toDate(end);
+  if (!s || !e) return 0;
+  return Math.max(0, (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()));
+}
+
+export function getLoanInterestDetails(loan, asOfDate = todayInputValue(), viewMode = "stored") {
+  if (!loan) {
+    return { interest: 0, methodLabel: "Simple Interest (loan under 1 year)", days: 0, months: 0 };
+  }
   const principal = Math.max(0, num(loan.outstandingPrincipal, loan.loanAmount));
-  if (principal <= 0) return 0;
   const start = toDate(loan.startDateISO);
   const asOf = toDate(asOfDate) || new Date();
-  if (!start || asOf <= start) return 0;
+  if (!start || principal <= 0 || asOf <= start) {
+    return { interest: 0, methodLabel: "Simple Interest (loan under 1 year)", days: 0, months: 0 };
+  }
   const days = Math.max(0, Math.ceil((asOf - start) / 86400000));
-  const rate = Math.max(0, num(loan.interestRatePct));
-  const basis = loan.interestBasis || "Monthly Simple";
-  const interest = basis === "Daily Simple"
-    ? principal * (rate / 100) * days
-    : principal * (rate / 100) * (days / 30);
-  return roundMoney(interest);
+  const months = monthsBetween(start, asOf);
+  const dailyRatePercent = num(loan.dailyRatePercent ?? loan.loanDefaultDailyRate ?? loan.interestRatePct, 0.07);
+  const monthlyRatePercent = num(loan.monthlyRatePercent ?? loan.loanDefaultMonthlyRate, 2);
+  if (viewMode === "daily") {
+    const interest = roundMoney((principal * dailyRatePercent * days) / 100);
+    return { interest, methodLabel: "Daily view", days, months, dailyRatePercent, monthlyRatePercent };
+  }
+  if (viewMode === "monthly") {
+    const interest = roundMoney(principal * Math.pow(1 + monthlyRatePercent / 100, months) - principal);
+    return { interest, methodLabel: `Monthly compound view, N = ${months} months`, days, months, dailyRatePercent, monthlyRatePercent };
+  }
+  if (days <= 365) {
+    const interest = roundMoney((principal * dailyRatePercent * days) / 100);
+    return {
+      interest,
+      methodLabel: "Simple Interest (loan under 1 year)",
+      days,
+      months,
+      dailyRatePercent,
+      monthlyRatePercent
+    };
+  }
+  const interest = roundMoney(principal * Math.pow(1 + monthlyRatePercent / 100, months) - principal);
+  return {
+    interest,
+    methodLabel: `Compound Interest - monthly compounding, N = ${months} months`,
+    note: "Interest method changed to compound (monthly) as loan has exceeded 1 year.",
+    days,
+    months,
+    dailyRatePercent,
+    monthlyRatePercent
+  };
+}
+
+export function calculateLoanInterest(loan, asOfDate = todayInputValue()) {
+  return getLoanInterestDetails(loan, asOfDate).interest;
 }
 
 export function computedLoanStatus(loan, date = todayInputValue()) {

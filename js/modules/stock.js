@@ -3,13 +3,16 @@ import {
   $$,
   collectForm,
   deriveFinancialYear,
+  displayPurity,
   emptyState,
   escapeHtml,
   formatDate,
   formatGm,
   formatINR,
+  goldPurityOptionsHtml,
   num,
   openDialog,
+  parseGoldPurity,
   renderBadge,
   renderTable,
   requireNonNegative,
@@ -21,13 +24,14 @@ import {
 } from "../helpers.js";
 import {
   addRecord,
-  adjustStock,
   deleteRecord,
   getAll,
   getByKey,
+  getSettings,
   logAudit,
   nextId,
-  putRecord
+  putRecord,
+  updateKnownCategory
 } from "../data-service.js";
 import { ensureOwnerPassword } from "../security.js";
 
@@ -35,12 +39,20 @@ let state = {
   activeTab: "add",
   lots: [],
   movements: [],
+  billItems: [],
+  bills: [],
+  settings: null,
   editing: null
 };
 
 export async function render(container) {
-  state.lots = await getAll("stockLots");
-  state.movements = await getAll("stockMovements");
+  [state.lots, state.movements, state.billItems, state.bills, state.settings] = await Promise.all([
+    getAll("stockLots"),
+    getAll("stockMovements"),
+    getAll("billItems"),
+    getAll("bills"),
+    getSettings()
+  ]);
   state.editing = null;
   container.innerHTML = `
     <div class="page-grid">
@@ -57,6 +69,7 @@ export async function render(container) {
           ${tabButton("history", "Purchase History")}
           ${tabButton("summary", "Stock Summary")}
           ${tabButton("adjust", "Adjustments")}
+          ${tabButton("sold", "Sold Items")}
         </div>
         <div id="stock-tab"></div>
       </section>
@@ -79,6 +92,15 @@ function wireTabs(container) {
   });
 }
 
+function categoryDatalists() {
+  const gold = new Set([...(state.settings?.goldCategories || []), ...state.lots.filter((lot) => lot.metalType === "Gold").map((lot) => lot.category)]);
+  const silver = new Set([...(state.settings?.silverCategories || []), ...state.lots.filter((lot) => lot.metalType === "Silver").map((lot) => lot.category)]);
+  return `
+    <datalist id="gold-stock-categories">${Array.from(gold).filter(Boolean).sort().map((category) => `<option value="${escapeHtml(category)}"></option>`).join("")}<option value="+ Add new category"></option></datalist>
+    <datalist id="silver-stock-categories">${Array.from(silver).filter(Boolean).sort().map((category) => `<option value="${escapeHtml(category)}"></option>`).join("")}<option value="+ Add new category"></option></datalist>
+  `;
+}
+
 async function renderTab(container) {
   const host = $("#stock-tab", container);
   if (state.activeTab === "add") {
@@ -99,23 +121,31 @@ async function renderTab(container) {
   if (state.activeTab === "adjust") {
     host.innerHTML = renderAdjustments();
   }
+  if (state.activeTab === "sold") {
+    host.innerHTML = renderSoldItems(container);
+    wireSoldFilters(container);
+  }
 }
 
 function renderAddForm(stockId) {
   const lot = state.editing || {};
+  const isSilver = lot.metalType === "Silver";
   return `
     <form id="stock-form" class="page-grid" autocomplete="off">
+      ${categoryDatalists()}
       <div class="form-grid">
         <label class="field"><span>Stock ID</span><input class="readonly-input" name="stockId" value="${escapeHtml(stockId)}" readonly></label>
         <label class="field"><span>Purchase date</span><input name="purchaseDateISO" type="date" value="${escapeHtml(lot.purchaseDateISO || todayInputValue())}" required></label>
         <label class="field"><span>Item name</span><input name="itemName" value="${escapeHtml(lot.itemName || "")}" required></label>
-        <label class="field"><span>Category</span><input name="category" value="${escapeHtml(lot.category || "")}" required></label>
+        <label class="field"><span>Category</span><input name="category" list="${isSilver ? "silver-stock-categories" : "gold-stock-categories"}" value="${escapeHtml(lot.category || "")}" required></label>
         <label class="field"><span>Metal type</span><select name="metalType"><option ${lot.metalType === "Gold" ? "selected" : ""}>Gold</option><option ${lot.metalType === "Silver" ? "selected" : ""}>Silver</option></select></label>
-        <label class="field"><span>Purity</span><input name="purity" value="${escapeHtml(lot.purity || "")}" placeholder="22K, 18K, 999" required></label>
+        <label class="field" data-purity-wrap ${isSilver ? "hidden" : ""}><span>Gold purity/fineness</span><select name="puritySelect">${goldPurityOptionsHtml(lot.purity || 91.6)}</select><input name="purityCustom" type="number" min="0" step="0.01" value="" hidden></label>
         <label class="field"><span>Gross weight gm</span><input name="grossWeightGm" type="number" min="0.001" step="0.001" value="${escapeHtml(lot.grossWeightGm || "")}" required></label>
+        <label class="field"><span>Wastage %</span><input name="wastagePercent" type="number" min="0" step="0.01" value="${escapeHtml(lot.wastagePercent || 0)}"></label>
+        <label class="field"><span>Net weight gm</span><input name="netWeightGrams" type="number" min="0" step="0.001" value="${escapeHtml(lot.netWeightGrams || lot.availableNetWeightGm || lot.availableWeightGm || "")}"></label>
         <label class="field"><span>Available weight gm</span><input class="readonly-input" name="availableWeightGm" type="number" step="0.001" value="${escapeHtml(lot.availableWeightGm || "")}" readonly></label>
         <label class="field"><span>Purchase rate</span><input name="purchaseRate" type="number" min="0" step="0.01" value="${escapeHtml(lot.purchaseRate || 0)}"></label>
-        <label class="field"><span>Selling rate</span><input name="sellingRate" type="number" min="0" step="0.01" value="${escapeHtml(lot.sellingRate || 0)}"></label>
+        <label class="field"><span>Making Charge (₹)</span><input name="makingChargeRs" type="number" min="0" step="1" value="${escapeHtml(lot.makingChargeRs || 0)}"></label>
         <label class="field"><span>Supplier name</span><input name="supplierName" value="${escapeHtml(lot.supplierName || "")}"></label>
         <label class="field full"><span>Notes</span><textarea name="notes">${escapeHtml(lot.notes || "")}</textarea></label>
       </div>
@@ -130,14 +160,42 @@ function renderAddForm(stockId) {
 function wireAddForm(container) {
   const form = $("#stock-form", container);
   const gross = form.elements.grossWeightGm;
-  gross.addEventListener("input", () => {
-    if (!state.editing) form.elements.availableWeightGm.value = gross.value;
+  const recalcNet = () => {
+    const net = Math.max(0, num(form.elements.grossWeightGm.value) * (1 - num(form.elements.wastagePercent.value) / 100));
+    if (!state.editing || !form.elements.netWeightGrams.value) form.elements.netWeightGrams.value = net ? net.toFixed(3) : "";
+    if (!state.editing) form.elements.availableWeightGm.value = form.elements.netWeightGrams.value || gross.value;
+  };
+  gross.addEventListener("input", recalcNet);
+  form.elements.wastagePercent.addEventListener("input", recalcNet);
+  form.elements.netWeightGrams.addEventListener("input", () => {
+    if (!state.editing) form.elements.availableWeightGm.value = form.elements.netWeightGrams.value;
+  });
+  form.elements.metalType.addEventListener("change", () => {
+    const isSilver = form.elements.metalType.value === "Silver";
+    $("[data-purity-wrap]", form).hidden = isSilver;
+    form.elements.category.setAttribute("list", isSilver ? "silver-stock-categories" : "gold-stock-categories");
+  });
+  form.elements.category.addEventListener("change", async () => {
+    if (form.elements.category.value !== "+ Add new category") return;
+    const metalType = form.elements.metalType.value;
+    const result = await openDialog({
+      title: `Add ${metalType} category`,
+      fields: [{ name: "category", label: "Category name", required: true }],
+      confirmText: "Add category"
+    });
+    form.elements.category.value = result?.category || "";
+    if (result?.category) await updateKnownCategory(metalType, result.category);
+  });
+  form.elements.puritySelect?.addEventListener("change", () => {
+    form.elements.purityCustom.hidden = form.elements.puritySelect.value !== "custom";
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const data = collectForm(form);
       validateStock(data);
+      const purity = data.metalType === "Silver" ? null : parseGoldPurity(data.puritySelect, data.purityCustom);
+      const netWeight = num(data.netWeightGrams || data.grossWeightGm);
       const now = new Date().toISOString();
       const existing = await getByKey("stockLots", data.stockId);
       const record = {
@@ -146,11 +204,15 @@ function wireAddForm(container) {
         itemName: data.itemName,
         category: data.category,
         metalType: data.metalType,
-        purity: data.purity,
+        purity,
         grossWeightGm: num(data.grossWeightGm),
-        availableWeightGm: state.editing ? num(data.availableWeightGm) : num(data.grossWeightGm),
+        grossWeightGrams: num(data.grossWeightGm),
+        netWeightGrams: netWeight,
+        wastagePercent: num(data.wastagePercent),
+        availableWeightGm: state.editing ? num(data.availableWeightGm) : netWeight,
+        availableNetWeightGm: state.editing ? num(data.availableWeightGm) : netWeight,
         purchaseRate: num(data.purchaseRate),
-        sellingRate: num(data.sellingRate),
+        makingChargeRs: Math.max(0, Math.floor(num(data.makingChargeRs))),
         supplierName: data.supplierName || "",
         notes: data.notes || "",
         status: num(state.editing ? data.availableWeightGm : data.grossWeightGm) > 0 ? "Available" : "Sold Out",
@@ -159,9 +221,11 @@ function wireAddForm(container) {
       };
       if (state.editing) {
         await putRecord("stockLots", record);
+        await updateKnownCategory(record.metalType, record.category);
         await logAudit("STOCK_EDIT", "Stock", record.stockId, "Stock edited", `${record.itemName} stock lot updated.`);
       } else {
         await addRecord("stockLots", record);
+        await updateKnownCategory(record.metalType, record.category);
         await addRecord("stockMovements", {
           movementId: `MOV-${Date.now()}`,
           dateISO: data.purchaseDateISO,
@@ -171,7 +235,9 @@ function wireAddForm(container) {
           metalType: data.metalType,
           purity: data.purity,
           category: data.category,
-          deltaWeightGm: num(data.grossWeightGm),
+          deltaWeightGm: netWeight,
+          deltaGross: num(data.grossWeightGm),
+          deltaNet: netWeight,
           reason: "Purchase entry"
         });
         await logAudit("STOCK_CREATE", "Stock", record.stockId, "Stock purchase", `${record.metalType} ${record.itemName} added.`);
@@ -195,10 +261,10 @@ function validateStock(data) {
   requireText(data.itemName, "Item name");
   requireText(data.category, "Category");
   requireText(data.metalType, "Metal type");
-  requireText(data.purity, "Purity");
+  if (data.metalType === "Gold") requirePositive(parseGoldPurity(data.puritySelect, data.purityCustom), "Gold purity");
   requirePositive(data.grossWeightGm, "Gross weight");
+  requirePositive(data.netWeightGrams || data.grossWeightGm, "Net weight");
   requireNonNegative(data.purchaseRate, "Purchase rate");
-  requireNonNegative(data.sellingRate, "Selling rate");
 }
 
 function renderCurrentStock() {
@@ -206,10 +272,10 @@ function renderCurrentStock() {
   return renderTable([
     { label: "Stock ID", render: (row) => `<strong>${escapeHtml(row.stockId)}</strong><br><span class="muted">${formatDate(row.purchaseDateISO)}</span>` },
     { label: "Item", render: (row) => `${escapeHtml(row.itemName)}<br><span class="muted">${escapeHtml(row.category)}</span>` },
-    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)}<br><span class="muted">${escapeHtml(row.purity)}</span>` },
+    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)}<br><span class="muted">${displayPurity(row.purity, row.metalType)}</span>` },
     { label: "Gross", render: (row) => formatGm(row.grossWeightGm) },
+    { label: "Net Wt", render: (row) => row.netWeightGrams ? formatGm(row.netWeightGrams) : `~${formatGm(row.grossWeightGm)}` },
     { label: "Available", render: (row) => formatGm(row.availableWeightGm) },
-    { label: "Selling rate", render: (row) => formatINR(row.sellingRate) },
     { label: "Supplier", render: (row) => escapeHtml(row.supplierName || "-") },
     { label: "Status", render: (row) => renderBadge(row.status) },
     {
@@ -227,6 +293,12 @@ function renderCurrentStock() {
 
 function wireCurrentStock(container) {
   $$("[data-edit-stock]", container).forEach((button) => button.addEventListener("click", async () => {
+    const approval = await ensureOwnerPassword("Edit stock lot", {
+      message: "Owner approval is required before changing stock lot weights or details.",
+      confirmText: "Edit stock",
+      danger: true
+    });
+    if (!approval) return;
     state.editing = await getByKey("stockLots", button.dataset.editStock);
     state.activeTab = "add";
     await render(container);
@@ -242,9 +314,11 @@ function wireCurrentStock(container) {
 async function promptAdjustment(container, stockId) {
   const result = await openDialog({
     title: "Stock adjustment",
-    message: "Use positive grams to add stock and negative grams to reduce available stock.",
+    message: "Choose Add or Remove, then enter independent gross and net weight corrections.",
     fields: [
-      { name: "delta", label: "Adjustment grams", type: "number", required: true },
+      { name: "adjustType", label: "Adjust type (Add or Remove)", value: "Add", required: true },
+      { name: "gross", label: "Adjust Gross Wt (g)", type: "number", required: true },
+      { name: "net", label: "Adjust Net Wt (g)", type: "number", required: true },
       { name: "reason", label: "Reason", type: "textarea", required: true }
     ],
     confirmText: "Apply adjustment"
@@ -252,9 +326,38 @@ async function promptAdjustment(container, stockId) {
   if (!result) return;
   try {
     requireText(result.reason, "Adjustment reason");
-    if (num(result.delta) === 0) throw new Error("Adjustment grams cannot be zero.");
-    await adjustStock(stockId, num(result.delta), result.reason);
-    await logAudit("STOCK_ADJUST", "Stock", stockId, result.reason, `Adjusted by ${num(result.delta)} gm.`);
+    const lot = await getByKey("stockLots", stockId);
+    const sign = String(result.adjustType).toLowerCase().startsWith("remove") ? -1 : 1;
+    const deltaGross = sign * num(result.gross);
+    const deltaNet = sign * num(result.net);
+    if (deltaGross === 0 && deltaNet === 0) throw new Error("Adjustment weight cannot be zero.");
+    const updated = {
+      ...lot,
+      grossWeightGm: num(lot.grossWeightGm) + deltaGross,
+      grossWeightGrams: num(lot.grossWeightGrams, lot.grossWeightGm) + deltaGross,
+      netWeightGrams: num(lot.netWeightGrams, lot.availableWeightGm) + deltaNet,
+      availableWeightGm: num(lot.availableWeightGm) + deltaNet,
+      availableNetWeightGm: num(lot.availableNetWeightGm, lot.availableWeightGm) + deltaNet,
+      updatedAt: new Date().toISOString()
+    };
+    if (updated.availableWeightGm < 0 || updated.netWeightGrams < 0 || updated.grossWeightGm < 0) throw new Error("Adjustment cannot make stock weight negative.");
+    await putRecord("stockLots", updated);
+    await addRecord("stockMovements", {
+      movementId: `MOV-${Date.now()}`,
+      dateISO: todayInputValue(),
+      refType: "ADJUSTMENT",
+      type: "adjustment",
+      refId: stockId,
+      stockId,
+      metalType: lot.metalType,
+      purity: lot.purity,
+      category: lot.category,
+      deltaWeightGm: deltaNet,
+      deltaGross,
+      deltaNet,
+      reason: result.reason
+    });
+    await logAudit("STOCK_ADJUST", "Stock", stockId, result.reason, `Adjusted gross ${deltaGross} gm, net ${deltaNet} gm.`);
     state.lots = await getAll("stockLots");
     state.movements = await getAll("stockMovements");
     showToast("Stock adjustment saved.", "success");
@@ -300,7 +403,7 @@ function renderPurchaseHistory() {
     { label: "Date", render: (row) => formatDate(row.purchaseDateISO) },
     { label: "Stock ID", key: "stockId" },
     { label: "Item", render: (row) => `${escapeHtml(row.itemName)}<br><span class="muted">${escapeHtml(row.category)}</span>` },
-    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)} ${escapeHtml(row.purity)}` },
+    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)} ${displayPurity(row.purity, row.metalType)}` },
     { label: "Gross", render: (row) => formatGm(row.grossWeightGm) },
     { label: "Purchase rate", render: (row) => formatINR(row.purchaseRate) },
     { label: "Supplier", render: (row) => escapeHtml(row.supplierName || "-") },
@@ -311,7 +414,7 @@ function renderPurchaseHistory() {
 function summaryRows() {
   const map = new Map();
   state.lots.filter((lot) => lot.status !== "Deleted").forEach((lot) => {
-    const key = `${lot.metalType}|${lot.purity}|${lot.category}`;
+    const key = `${lot.metalType}|${lot.metalType === "Silver" ? "silver" : lot.purity}|${lot.category}`;
     const existing = map.get(key) || {
       metalType: lot.metalType,
       purity: lot.purity,
@@ -339,7 +442,7 @@ function renderSummary() {
     </div>
     ${renderTable([
       { label: "Metal", key: "metalType" },
-      { label: "Purity", key: "purity" },
+      { label: "Purity", render: (row) => displayPurity(row.purity, row.metalType) },
       { label: "Category", key: "category" },
       { label: "Gross", render: (row) => formatGm(row.grossWeightGm) },
       { label: "Available", render: (row) => formatGm(row.availableWeightGm) }
@@ -354,9 +457,89 @@ function renderAdjustments() {
     { label: "Movement ID", key: "movementId" },
     { label: "Type", key: "refType" },
     { label: "Reference", key: "refId" },
-    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)} ${escapeHtml(row.purity)}` },
+    { label: "Metal", render: (row) => `${escapeHtml(row.metalType)} ${displayPurity(row.purity, row.metalType)}` },
     { label: "Category", key: "category" },
     { label: "Delta", render: (row) => formatGm(row.deltaWeightGm) },
     { label: "Reason", render: (row) => escapeHtml(row.reason || "-") }
   ], rows, "No stock movements found.");
+}
+
+function soldRows(container) {
+  const form = $("#sold-filter", container);
+  const filters = form ? collectForm(form) : {};
+  return state.movements
+    .filter((movement) => movement.type === "sale" || movement.refType === "SALE")
+    .map((movement) => {
+      const item = state.billItems.find((line) => line.lineId === movement.lineId) || {};
+      const bill = state.bills.find((entry) => entry.billNo === movement.refId) || {};
+      return {
+        ...movement,
+        billNo: movement.refId,
+        customerName: bill.customerName || "-",
+        itemName: item.itemName || "-",
+        grossWeightGm: item.weightGm || Math.abs(num(movement.deltaGross || movement.deltaWeightGm)),
+        netWeightGm: item.netWeightGm || item.weightGm || Math.abs(num(movement.deltaNet || movement.deltaWeightGm)),
+        ratePerGm: item.ratePerGm || 0,
+        makingCharge: (num(item.makingCharge) || 0) + (num(item.makingChargeRs) || 0),
+        saleAmount: item.lineTotal || 0
+      };
+    })
+    .filter((row) => !filters.metal || filters.metal === "All" || row.metalType === filters.metal)
+    .filter((row) => !filters.from || row.dateISO >= filters.from)
+    .filter((row) => !filters.to || row.dateISO <= filters.to)
+    .filter((row) => !filters.category || row.category === filters.category);
+}
+
+function renderSoldItems(container) {
+  const categories = Array.from(new Set(state.movements.map((movement) => movement.category).filter(Boolean))).sort();
+  const rows = soldRows(container);
+  const totalGold = rows.filter((row) => row.metalType === "Gold").reduce((sum, row) => sum + num(row.netWeightGm), 0);
+  const totalSilver = rows.filter((row) => row.metalType === "Silver").reduce((sum, row) => sum + num(row.netWeightGm), 0);
+  const totalSale = rows.reduce((sum, row) => sum + num(row.saleAmount), 0);
+  return `
+    <form id="sold-filter" class="form-grid">
+      <label class="field"><span>Metal</span><select name="metal"><option>All</option><option>Gold</option><option>Silver</option></select></label>
+      <label class="field"><span>From</span><input name="from" type="date"></label>
+      <label class="field"><span>To</span><input name="to" type="date"></label>
+      <label class="field"><span>Category</span><select name="category"><option value="">All</option>${categories.map((category) => `<option>${escapeHtml(category)}</option>`).join("")}</select></label>
+    </form>
+    <div id="sold-table">
+      ${renderSoldTable(rows, totalGold, totalSilver, totalSale)}
+    </div>
+  `;
+}
+
+function renderSoldTable(rows, totalGold, totalSilver, totalSale) {
+  return `
+    ${renderTable([
+      { label: "Date", render: (row) => formatDate(row.dateISO) },
+      { label: "Bill No", key: "billNo" },
+      { label: "Customer", key: "customerName" },
+      { label: "Metal", key: "metalType" },
+      { label: "Category", key: "category" },
+      { label: "Item Name", key: "itemName" },
+      { label: "Purity", render: (row) => displayPurity(row.purity, row.metalType) },
+      { label: "Gross Wt", render: (row) => formatGm(row.grossWeightGm) },
+      { label: "Net Wt", render: (row) => formatGm(row.netWeightGm) },
+      { label: "Rate/g", render: (row) => formatINR(row.ratePerGm) },
+      { label: "Making", render: (row) => formatINR(row.makingCharge) },
+      { label: "Sale Amount", render: (row) => formatINR(row.saleAmount) }
+    ], rows, "No sold items found.")}
+    <div class="notice">
+      <strong>Sold summary</strong>
+      <span>Total gold sold: ${formatGm(totalGold)} | Total silver sold: ${formatGm(totalSilver)} | Total sale value: ${formatINR(totalSale)}</span>
+    </div>
+  `;
+}
+
+function wireSoldFilters(container) {
+  const form = $("#sold-filter", container);
+  if (!form) return;
+  form.addEventListener("change", () => {
+    const rows = soldRows(container);
+    const totalGold = rows.filter((row) => row.metalType === "Gold").reduce((sum, row) => sum + num(row.netWeightGm), 0);
+    const totalSilver = rows.filter((row) => row.metalType === "Silver").reduce((sum, row) => sum + num(row.netWeightGm), 0);
+    const totalSale = rows.reduce((sum, row) => sum + num(row.saleAmount), 0);
+    $("#sold-table", container).innerHTML = renderSoldTable(rows, totalGold, totalSilver, totalSale);
+  });
 }

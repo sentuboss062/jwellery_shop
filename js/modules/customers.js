@@ -8,13 +8,16 @@ import {
   formatGm,
   formatINR,
   num,
+  openDialog,
   renderBadge,
   renderTable,
+  showToast,
   sortDescByDate,
   textMatches
 } from "../helpers.js";
 import { computedLoanStatus } from "../helpers.js";
-import { getAll, listNormalizedBills } from "../data-service.js";
+import { getAll, listNormalizedBills, softDeleteCustomer, updateCustomer } from "../data-service.js";
+import { ensureOwnerPassword } from "../security.js";
 
 let state = {
   customers: [],
@@ -81,6 +84,7 @@ function customerStats(customer) {
 function filteredCustomers(container) {
   const filters = collectForm($("#customer-search", container));
   return state.customers
+    .filter((customer) => !customer.deleted)
     .filter((customer) => textMatches(customer, filters.query, ["name", "mobile"]))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -96,12 +100,55 @@ function renderCustomersTable(container) {
     { label: "Last transaction", render: (row) => formatDate(customerStats(row).lastTransactionDate) },
     { label: "Pending due", render: (row) => formatINR(customerStats(row).pendingDue) },
     { label: "Active loans", render: (row) => customerStats(row).activeLoanCount },
-    { label: "Action", render: (row) => `<button class="mini-button" type="button" data-view="${escapeHtml(row.mobile)}">View</button>` }
+    { label: "Action", render: (row) => `<div class="row-actions"><button class="mini-button" type="button" data-view="${escapeHtml(row.mobile)}">View</button><button class="mini-button" type="button" data-edit-customer="${escapeHtml(row.customerId)}">Edit</button><button class="mini-button" type="button" data-delete-customer="${escapeHtml(row.customerId)}">Delete</button></div>` }
   ], rows, "No customers found.");
   $$("[data-view]", host).forEach((button) => button.addEventListener("click", () => {
     state.selectedMobile = button.dataset.view;
     renderCustomerDetail(container);
   }));
+  $$("[data-edit-customer]", host).forEach((button) => button.addEventListener("click", async () => editCustomer(container, button.dataset.editCustomer)));
+  $$("[data-delete-customer]", host).forEach((button) => button.addEventListener("click", async () => deleteCustomer(container, button.dataset.deleteCustomer)));
+}
+
+async function editCustomer(container, customerId) {
+  const customer = state.customers.find((item) => item.customerId === customerId);
+  if (!customer) return;
+  const result = await openDialog({
+    title: "Edit customer",
+    fields: [
+      { name: "name", label: "Name", value: customer.name, required: true },
+      { name: "mobile", label: "Phone", value: customer.mobile, required: true },
+      { name: "address", label: "Address", type: "textarea", value: customer.address || "" },
+      { name: "notes", label: "Notes / Remarks", type: "textarea", value: customer.notes || "" }
+    ],
+    confirmText: "Save customer"
+  });
+  if (!result) return;
+  try {
+    await updateCustomer(customerId, result);
+    state.customers = await getAll("customers");
+    showToast("Customer updated.", "success");
+    renderCustomersTable(container);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function deleteCustomer(container, customerId) {
+  try {
+    const approval = await ensureOwnerPassword("Delete customer", {
+      message: "This soft-deletes the customer profile but keeps bill and loan history.",
+      confirmText: "Delete customer",
+      danger: true
+    });
+    if (!approval) return;
+    await softDeleteCustomer(customerId, approval.reason);
+    state.customers = await getAll("customers");
+    showToast("Customer soft-deleted.", "success");
+    renderCustomersTable(container);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function renderCustomerDetail(container) {

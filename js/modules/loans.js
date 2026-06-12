@@ -9,10 +9,13 @@ import {
   formatDate,
   formatGm,
   formatINR,
+  getLoanInterestDetails,
+  goldPurityOptionsHtml,
   isValidMobile,
   normalizeMobile,
   num,
   openDialog,
+  parseGoldPurity,
   renderBadge,
   renderTable,
   requireNonNegative,
@@ -42,8 +45,17 @@ let state = {
   settings: null,
   loans: [],
   activeLoan: null,
-  editingLoan: null
+  editingLoan: null,
+  interestView: "stored"
 };
+
+const DRAFT_KEY = "draft_loan";
+let draftTimer = null;
+let beforeUnloadHandler = null;
+
+console.assert(Math.round((100000 * Math.pow(1.02, 13) - 100000)) === 29361, "13 month compound interest check failed");
+console.assert(Math.round((100000 * Math.pow(1.02, 24) - 100000)) === 60844, "24 month compound interest check failed");
+console.assert(Math.round((100000 * Math.pow(1.02, 36) - 100000)) === 103989, "36 month compound interest check failed");
 
 export async function render(container) {
   state.settings = await getSettings();
@@ -87,6 +99,7 @@ export async function render(container) {
     </div>
   `;
   wireLoanForm(container);
+  restoreDraft(container);
   renderLoanHistory(container);
   renderLoanDetail(container);
 }
@@ -101,11 +114,11 @@ function renderLoanForm(loanNo) {
       <label class="field full"><span>Address</span><textarea name="address"></textarea></label>
       <label class="field"><span>Item name</span><input name="itemName" required></label>
       <label class="field"><span>Gold weight gm</span><input name="goldWeightGm" type="number" min="0.001" step="0.001" required></label>
-      <label class="field"><span>Gold purity</span><input name="goldPurity" required placeholder="22K"></label>
+      <label class="field"><span>Gold purity/fineness</span><select name="goldPuritySelect">${goldPurityOptionsHtml(91.6)}</select><input name="goldPurityCustom" type="number" min="0" step="0.01" hidden></label>
       <label class="field"><span>Estimated value</span><input name="estimatedValue" type="number" min="0.01" step="0.01" required></label>
       <label class="field"><span>Loan amount</span><input name="loanAmount" type="number" min="0.01" step="0.01" required></label>
-      <label class="field"><span>Interest rate %</span><input name="interestRatePct" type="number" min="0" step="0.01" required></label>
-      <label class="field"><span>Interest basis</span><select name="interestBasis"><option>Monthly Simple</option><option>Daily Simple</option></select></label>
+      <label class="field"><span>Daily Rate (%/day)</span><input name="dailyRatePercent" type="number" min="0" step="0.01" value="${escapeHtml(state.settings.loanDefaultDailyRate ?? 0.07)}" required></label>
+      <label class="field"><span>Monthly Rate (%/month)</span><input name="monthlyRatePercent" type="number" min="0" step="0.01" value="${escapeHtml(state.settings.loanDefaultMonthlyRate ?? 2)}" required></label>
       <label class="field"><span>Start date</span><input name="startDateISO" type="date" value="${todayInputValue()}" required></label>
       <label class="field"><span>Due date</span><input name="dueDateISO" type="date"></label>
       <label class="field full"><span>Notes</span><textarea name="notes"></textarea></label>
@@ -119,6 +132,13 @@ function wireLoanForm(container) {
     if (event.target.name === "customerMobile") {
       event.target.value = normalizeMobile(event.target.value).slice(0, 10);
     }
+    queueDraft(container);
+  });
+  form.addEventListener("change", (event) => {
+    if (event.target.name === "goldPuritySelect") {
+      form.elements.goldPurityCustom.hidden = event.target.value !== "custom";
+    }
+    queueDraft(container);
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -147,6 +167,9 @@ function wireLoanForm(container) {
     }
     await downloadLoanPdf(state.activeLoan, state.settings);
   });
+  beforeUnloadHandler = () => saveDraft(container);
+  window.removeEventListener("beforeunload", beforeUnloadHandler);
+  window.addEventListener("beforeunload", beforeUnloadHandler);
 }
 
 function validateLoan(data) {
@@ -154,10 +177,11 @@ function validateLoan(data) {
   if (!isValidMobile(data.customerMobile)) throw new Error("Customer mobile must be exactly 10 digits.");
   requireText(data.itemName, "Item name");
   requirePositive(data.goldWeightGm, "Gold weight");
-  requireText(data.goldPurity, "Gold purity");
+  requirePositive(parseGoldPurity(data.goldPuritySelect, data.goldPurityCustom), "Gold purity");
   requirePositive(data.estimatedValue, "Estimated value");
   requirePositive(data.loanAmount, "Loan amount");
-  requireNonNegative(data.interestRatePct, "Interest rate");
+  requireNonNegative(data.dailyRatePercent, "Daily interest rate");
+  requireNonNegative(data.monthlyRatePercent, "Monthly interest rate");
   requireText(data.startDateISO, "Start date");
 }
 
@@ -194,11 +218,13 @@ async function saveLoan(container) {
       address: data.address || "",
       itemName: data.itemName,
       goldWeightGm: num(data.goldWeightGm),
-      goldPurity: data.goldPurity,
+      goldPurity: parseGoldPurity(data.goldPuritySelect, data.goldPurityCustom),
       estimatedValue: num(data.estimatedValue),
       loanAmount: num(data.loanAmount),
-      interestRatePct: num(data.interestRatePct),
-      interestBasis: data.interestBasis,
+      interestRatePct: num(data.dailyRatePercent),
+      dailyRatePercent: num(data.dailyRatePercent),
+      monthlyRatePercent: num(data.monthlyRatePercent),
+      interestBasis: "Daily/Monthly Rule",
       startDateISO: data.startDateISO,
       dueDateISO: data.dueDateISO || "",
       status: state.editingLoan?.status || "Active",
@@ -224,6 +250,7 @@ async function saveLoan(container) {
       customerAddress: loan.address
     });
     await logAudit(state.editingLoan ? "LOAN_EDIT" : "LOAN_CREATE", "Loan", loan.loanNo, approval?.reason || "Loan saved", `${loan.customerName} loan ${loan.loanNo}`);
+    clearDraft();
     state.activeLoan = loan;
     state.editingLoan = null;
     state.loans = await getAll("loans");
@@ -295,11 +322,12 @@ function fillLoanForm(container, loan) {
     address: loan.address || "",
     itemName: loan.itemName,
     goldWeightGm: loan.goldWeightGm,
-    goldPurity: loan.goldPurity,
+    goldPuritySelect: loan.goldPurity,
+    goldPurityCustom: loan.goldPurity,
     estimatedValue: loan.estimatedValue,
     loanAmount: loan.loanAmount,
-    interestRatePct: loan.interestRatePct,
-    interestBasis: loan.interestBasis,
+    dailyRatePercent: loan.dailyRatePercent ?? loan.interestRatePct ?? 0.07,
+    monthlyRatePercent: loan.monthlyRatePercent ?? 2,
     startDateISO: loan.startDateISO,
     dueDateISO: loan.dueDateISO || "",
     status: computedLoanStatus(loan),
@@ -314,6 +342,7 @@ async function promptLoanPayment(container, loanNo, closeFull) {
   const loan = await getByKey("loans", loanNo);
   if (!loan) return;
   const interest = calculateLoanInterest(loan);
+  const details = getLoanInterestDetails(loan, todayInputValue(), state.interestView);
   const totalDue = num(loan.outstandingPrincipal) + interest;
   const result = await openDialog({
     title: closeFull ? "Full repayment" : "Partial repayment",
@@ -375,6 +404,7 @@ function renderLoanDetail(container) {
   }
   const status = computedLoanStatus(loan);
   const interest = calculateLoanInterest(loan);
+  const details = getLoanInterestDetails(loan, todayInputValue(), state.interestView);
   host.innerHTML = `
     <div class="section-header">
       <div>
@@ -383,17 +413,28 @@ function renderLoanDetail(container) {
       </div>
       <button class="button-secondary" type="button" data-return-item ${status !== "Closed" || loan.returnItemMarked ? "disabled" : ""}>Mark Returned Item</button>
     </div>
+    <div class="actions-row">
+      <span class="label">View as:</span>
+      <button class="tab-button ${state.interestView === "daily" ? "active" : ""}" type="button" data-interest-view="daily">Daily</button>
+      <button class="tab-button ${state.interestView === "monthly" ? "active" : ""}" type="button" data-interest-view="monthly">Monthly</button>
+      <button class="tab-button ${state.interestView === "stored" ? "active" : ""}" type="button" data-interest-view="stored">Rule</button>
+    </div>
     <div class="cards-grid">
       <div class="metric-card"><small>Loan amount</small><strong>${formatINR(loan.loanAmount)}</strong><span>Issued ${formatDate(loan.startDateISO)}</span></div>
       <div class="metric-card"><small>Outstanding principal</small><strong>${formatINR(loan.outstandingPrincipal)}</strong><span>Before current interest</span></div>
-      <div class="metric-card"><small>Interest accrued</small><strong>${formatINR(interest)}</strong><span>${escapeHtml(loan.interestBasis)}</span></div>
+      <div class="metric-card"><small>Interest accrued</small><strong>${formatINR(details.interest)}</strong><span>${escapeHtml(details.methodLabel)}</span></div>
       <div class="metric-card"><small>Item returned</small><strong>${loan.returnItemMarked ? "Yes" : "No"}</strong><span>${loan.closureDateISO ? `Closed ${formatDate(loan.closureDateISO)}` : "Loan not closed"}</span></div>
     </div>
+    ${details.note ? `<div class="notice warning"><strong>Interest method changed</strong><span>${escapeHtml(details.note)}</span></div>` : ""}
     <h3>Payment History</h3>
     ${(loan.payments || []).length ? `<ul class="timeline">${loan.payments.map((payment) => `
       <li><strong>${formatDate(payment.dateISO)}</strong> - ${formatINR(payment.amount)}<br><span class="muted">Principal ${formatINR(payment.principalComponent || 0)}, interest ${formatINR(payment.interestComponent || 0)} ${payment.note ? `- ${escapeHtml(payment.note)}` : ""}</span></li>
     `).join("")}</ul>` : emptyState("No loan payments recorded.")}
   `;
+  $$("[data-interest-view]", host).forEach((button) => button.addEventListener("click", () => {
+    state.interestView = button.dataset.interestView;
+    renderLoanDetail(container);
+  }));
   $("[data-return-item]", host)?.addEventListener("click", async () => {
     const updated = { ...loan, returnItemMarked: true, updatedAt: new Date().toISOString() };
     await putRecord("loans", updated);
@@ -403,4 +444,38 @@ function renderLoanDetail(container) {
     showToast("Returned item marked.", "success");
     renderLoanDetail(container);
   });
+}
+
+function queueDraft(container) {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => saveDraft(container), 800);
+}
+
+function saveDraft(container) {
+  const form = $("#loan-form", container);
+  if (!form) return;
+  localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...collectForm(form), savedAt: Date.now() }));
+}
+
+function restoreDraft(container) {
+  const raw = localStorage.getItem(DRAFT_KEY);
+  if (!raw) return;
+  try {
+    const draft = JSON.parse(raw);
+    if (Date.now() - draft.savedAt > 86400000) {
+      clearDraft();
+      return;
+    }
+    const form = $("#loan-form", container);
+    Object.entries(draft).forEach(([key, value]) => {
+      if (form.elements[key]) form.elements[key].value = value;
+    });
+    showToast("Draft restored from your last session.", "info");
+  } catch {
+    clearDraft();
+  }
+}
+
+function clearDraft() {
+  localStorage.removeItem(DRAFT_KEY);
 }

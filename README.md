@@ -6,7 +6,7 @@ Offline-first jewellery portal for an Indian family jewellery store. It manages 
 
 - Static HTML, CSS, and vanilla JavaScript ES modules
 - Service-layer data access with IndexedDB fallback
-- Optional Netlify Functions API + Supabase PostgreSQL backend
+- Optional Vercel Functions API + Supabase PostgreSQL backend
 - Service Worker + CacheStorage for offline app shell
 - jsPDF for bills and loan receipts
 - Chart.js for charts
@@ -21,31 +21,55 @@ Pinned CDN files used by `index.html` and cached by `sw.js`:
 
 ## Architecture
 
-The frontend has no build step. `db.js` is the IndexedDB fallback adapter. `api-client.js` talks to `/.netlify/functions/api` when Supabase environment variables are configured. UI modules do not call IndexedDB directly; they use `data-service.js`.
+The frontend has no build step. `db.js` is the IndexedDB fallback adapter. `api-client.js` talks to `/api` when Supabase environment variables are configured. UI modules do not call IndexedDB directly; they use `data-service.js`.
 
-When the API health check succeeds, business records are saved through Netlify Functions into Supabase. When the API is unavailable, the app uses browser-local IndexedDB so local/offline work still functions. Browser-local fallback data is not synced across devices, browsers, profiles, or domains.
+When the API health check succeeds, business records are saved through Vercel Functions into Supabase. When the API is unavailable, the app uses browser-local IndexedDB so local/offline work still functions. Browser-local fallback data is not synced across devices, browsers, profiles, or domains.
 
 ## Combined Billing
 
-Use **Combined Billing** for new invoices. One bill can contain multiple Gold and Silver line items. Each line stores metal type, item name, category, purity, weight gm, rate per gm, making charge percentage, wastage charge, discount, GST percentage, and line total.
+Use **Combined Billing** for new invoices. One bill can contain multiple Gold and Silver line items. Each line stores metal type, item name, category, gold purity/fineness where applicable, weight gm, rate per gm, making charge percentage, flat making charge rupees, wastage charge, discount, GST percentage, and line total.
 
 Stock deduction is performed per line against matching metal, purity, and category stock lots. Cancelling a combined bill restores stock for every line item. Legacy `goldBills` and `silverBills` remain readable in customers, dashboard, reports, backup, and PDF export.
+
+Rates are managed manually from the dashboard. The app prompts for today's gold and silver reference rates when no rate exists for the current date, and bill line items can update the saved reference rate from the rate field.
+
+Stock lots support gross weight, wastage percentage, net weight, and independent gross/net adjustments. Silver entries do not require purity. Gold purity uses preset fineness values with a custom option.
 
 ## Backend Setup
 
 1. Create a Supabase project.
 2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add Netlify environment variables from `.env.example`.
-4. Deploy the folder to Netlify.
-5. Visit `/.netlify/functions/api/health`; it should return `{ "ok": true }`.
+3. Add Vercel environment variables from `.env.example`.
+4. Deploy the folder to Vercel.
+5. Visit `/api/health`; it should return `{ "ok": true, "storage": "supabase", "platform": "vercel" }`.
 
-`SUPABASE_SERVICE_ROLE_KEY` must be stored only in Netlify environment variables. Do not expose it in frontend JavaScript.
+`SUPABASE_SERVICE_ROLE_KEY` must be stored only in Vercel environment variables. Do not expose it in frontend JavaScript.
 
 Backend tables include: `shops_settings`, `app_users`, `customers`, `bills`, `bill_items`, `legacy_gold_bills`, `legacy_silver_bills`, `stock_lots`, `stock_movements`, `exchange_entries`, `credits`, `credit_payments`, `loans`, `loan_payments`, `rates`, `audit_log`, and `backup_meta`.
 
-## Netlify Deployment
+## Vercel Deployment
 
-`netlify.toml` publishes `.` and uses `netlify/functions` for the API. `index.html` and `sw.js` are served with `Cache-Control: no-cache` to reduce update problems.
+`vercel.json` serves the static app from the project root and uses `api/[...path].js` for the Supabase-backed API. `index.html` and `sw.js` are served with `Cache-Control: no-cache` to reduce update problems.
+
+Recommended Vercel project settings:
+
+- Framework Preset: `Other`
+- Build Command: leave empty
+- Output Directory: leave empty or `.`
+- Install Command: leave empty
+
+Deploy from the Vercel dashboard by importing this folder's Git repo, or use the Vercel CLI:
+
+```bash
+vercel
+vercel --prod
+```
+
+## Running On Other Static Hosts
+
+The frontend can run on any static host that serves the folder over HTTPS, including Cloudflare Pages, GitHub Pages, or a local LAN web server. Hash routing means no server rewrite is needed for screens such as `#/dashboard`.
+
+For the optional backend, the host must support a compatible serverless API. The included API is written as a Vercel Function, so on Render, Cloudflare, or another platform you must port `api/[...path].js` to that platform's function format or keep the app in IndexedDB fallback mode.
 
 ## Offline Mode
 
@@ -95,4 +119,4 @@ Owner password is required for bill cancel, saved bill edit, stock delete, close
 - *** live bullion-rate auto-fetch integration
 - *** cloud sync / multi-device shared database
 - *** OTP / SMS / email verification
-- *** Netlify host-level site-wide password protection
+- *** platform host-level site-wide password protection

@@ -1,6 +1,7 @@
 import {
   calculateLoanInterest,
   computedLoanStatus,
+  displayPurity,
   escapeHtml,
   formatDate,
   formatGm,
@@ -95,7 +96,7 @@ export async function render(container) {
         <h2>Stock Summary Report</h2>
         ${renderTable([
           { label: "Metal", key: "metalType" },
-          { label: "Purity", key: "purity" },
+          { label: "Purity", render: (row) => displayPurity(row.purity, row.metalType) },
           { label: "Category", key: "category" },
           { label: "Gross", render: (row) => formatGm(row.grossWeightGm) },
           { label: "Available", render: (row) => formatGm(row.availableWeightGm) }

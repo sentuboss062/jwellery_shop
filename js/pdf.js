@@ -1,5 +1,6 @@
 import {
   calculateLoanInterest,
+  displayPurity,
   escapeHtml,
   formatDate,
   formatGm,
@@ -80,100 +81,127 @@ function addFooter(doc, settings) {
   doc.line(145, 274, 196, 274);
 }
 
+function addBillFooter(doc) {
+  const pages = doc.internal.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    doc.setDrawColor(190, 178, 160);
+    doc.line(15, 282, 195, 282);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text("Thank you for your purchase!", 15, 287);
+    doc.text("कृपया पुनः पधारें", 105, 287, { align: "center" });
+    doc.text(`Page ${page} of ${pages}`, 195, 287, { align: "right" });
+  }
+}
+
 export async function createBillPdfDoc(bill, settings) {
   const JsPDF = await getPdfCtor();
   const doc = new JsPDF({ unit: "mm", format: "a4" });
-  const items = bill.items?.length ? bill.items : null;
-  addShopHeader(doc, settings, `${items ? "Jewellery" : bill.metalType || "Jewellery"} Sale Bill`, bill.billNo, bill.dateISO);
+  const items = bill.items?.length ? bill.items : [{
+    lineNo: 1,
+    itemName: bill.itemName,
+    metalType: bill.metalType,
+    purity: bill.purity,
+    weightGm: bill.weightGm,
+    netWeightGm: bill.weightGm,
+    ratePerGm: bill.ratePerGm,
+    makingChargePct: bill.makingChargePct || 0,
+    makingChargeRs: bill.makingChargeRs || 0,
+    gstPct: bill.gstPct,
+    lineTotal: bill.finalTotal
+  }];
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text(settings.shopName || "Family Jewellery Shop", 105, 18, { align: "center" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text(`${settings.shopAddress || ""} ${settings.shopPhone ? `| Phone: ${settings.shopPhone}` : ""}`, 105, 25, { align: "center", maxWidth: 170 });
+  if (settings.gstin) doc.text(`GSTIN: ${settings.gstin}`, 105, 31, { align: "center" });
+  doc.setDrawColor(175, 146, 105);
+  doc.line(15, 36, 195, 36);
   if (bill.status === "Cancelled") addWatermark(doc, "CANCELLED");
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Customer", 14, 50);
-  doc.text(items ? "Items" : "Item and Pricing", 108, 50);
-
-  doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
-  drawRows(doc, 60, [
-    ["Name", bill.customerName],
-    ["Mobile", bill.customerMobile],
-    ["Address", bill.customerAddress || "-"],
-    ["Payment", bill.paymentMode || "-"],
-    ["Status", bill.status || "Active"]
-  ]);
+  doc.text("Bill No", 15, 46);
+  doc.text("Date", 108, 46);
+  doc.text("Customer", 15, 54);
+  doc.text("Phone", 108, 54);
+  doc.setFont("helvetica", "normal");
+  doc.text(bill.billNo, 38, 46);
+  doc.text(formatDate(bill.dateISO), 125, 46);
+  doc.text(bill.customerName || "-", 38, 54);
+  doc.text(bill.customerMobile || "-", 125, 54);
 
-  let totalsY = 116;
-  if (items) {
-    let y = 60;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    ["Metal", "Item", "Purity", "Wt", "Rate", "Making", "GST", "Total"].forEach((label, index) => {
-      doc.text(label, [108, 123, 145, 157, 167, 179, 190, 198][index], y, { align: index >= 3 ? "right" : "left" });
-    });
-    doc.setFont("helvetica", "normal");
-    y += 6;
-    items.slice(0, 12).forEach((item, index) => {
-      if (index % 2 === 0) {
-        doc.setFillColor(252, 247, 238);
-        doc.rect(106, y - 4, 90, 7, "F");
-      }
-      doc.text(safe(item.metalType), 108, y);
-      doc.text(safe(item.itemName).slice(0, 13), 123, y);
-      doc.text(safe(item.purity), 145, y);
-      doc.text(String(item.weightGm || 0), 157, y, { align: "right" });
-      doc.text(String(item.ratePerGm || 0), 167, y, { align: "right" });
-      doc.text(String(item.makingChargePct ?? 0), 179, y, { align: "right" });
-      doc.text(String(item.gstPct || 0), 190, y, { align: "right" });
-      doc.text(String(item.lineTotal || 0), 198, y, { align: "right" });
-      y += 7;
-    });
-    totalsY = Math.max(122, y + 10);
-  } else {
-    let y = 60;
-    const rightRows = [
-      ["Item", bill.itemName],
-      ["Category", bill.category],
-      ["Metal / Purity", `${bill.metalType} / ${bill.purity}`],
-      ["Weight", formatGm(bill.weightGm)],
-      ["Rate per gm", formatINR(bill.ratePerGm)]
-    ];
-    rightRows.forEach(([label, value], index) => {
-      if (index % 2 === 0) {
-        doc.setFillColor(252, 247, 238);
-        doc.rect(108, y - 5, 88, 8, "F");
-      }
-      doc.setFont("helvetica", "bold");
-      doc.text(label, 112, y);
-      doc.setFont("helvetica", "normal");
-      doc.text(safe(value), 156, y, { maxWidth: 38 });
-      y += 8;
-    });
-  }
-
+  let y = 68;
+  const columns = ["#", "Item", "Metal", "Purity", "Gross", "Net", "Rate/g", "Making %", "Making Rs", "GST%", "Amount"];
+  const xs = [16, 23, 56, 73, 91, 106, 121, 139, 158, 176, 194];
+  doc.setFillColor(249, 245, 238);
+  doc.rect(15, y - 5, 180, 8, "F");
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Totals", 14, totalsY);
-  const exchange = bill.exchangeId ? formatINR(bill.exchangeValue || 0) : "-";
+  doc.setFontSize(7.5);
+  columns.forEach((label, index) => doc.text(label, xs[index], y, { align: index >= 4 ? "right" : "left" }));
+  y += 8;
+  doc.setFont("helvetica", "normal");
+  items.forEach((item, index) => {
+    if (y > 260) {
+      doc.addPage();
+      y = 25;
+    }
+    if (index % 2 === 0) {
+      doc.setFillColor(249, 245, 238);
+      doc.rect(15, y - 5, 180, 8, "F");
+    }
+    const row = [
+      String(index + 1),
+      safe(item.itemName).slice(0, 17),
+      safe(item.metalType),
+      item.metalType === "Silver" ? "-" : displayPurity(item.purity, item.metalType),
+      String(item.weightGm || 0),
+      String(item.netWeightGm || item.weightGm || 0),
+      String(item.ratePerGm || 0),
+      String(item.makingChargePct ?? item.makingChargePercent ?? 0),
+      String(item.makingChargeRs || 0),
+      String(item.gstPct || 0),
+      String(item.lineTotal || 0)
+    ];
+    row.forEach((value, colIndex) => doc.text(value, xs[colIndex], y, { align: colIndex >= 4 ? "right" : "left", maxWidth: colIndex === 1 ? 30 : undefined }));
+    y += 8;
+  });
+
+  y += 8;
+  if (y > 240) {
+    doc.addPage();
+    y = 25;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("Totals", 135, y);
+  y += 7;
+  const makingTotal = items.reduce((sum, item) => sum + (Number(item.makingCharge || 0) + Number(item.makingChargeRs || 0)), 0);
   const totalRows = [
-    ["Metal value", formatINR(bill.metalValue ?? ((bill.weightGm || 0) * (bill.ratePerGm || 0)))],
-    ["Making charge", formatINR(bill.makingCharge || 0)],
-    ["Wastage charge", formatINR(bill.wastageCharge || 0)],
-    ["Discount", formatINR(bill.discountAmt || 0)],
-    ["Exchange value", exchange],
     ["Subtotal", formatINR(bill.subtotal || 0)],
-    [`GST ${bill.gstPct || 0}%`, formatINR(bill.gstAmt || 0)],
-    ["Final total", formatINR(bill.finalTotal || 0)],
-    ["Paid", formatINR(bill.paidAmount || 0)],
-    ["Due", formatINR(bill.dueAmount || 0)]
+    ["Total making charges", formatINR(makingTotal || bill.makingCharge || 0)],
+    ["GST amount", formatINR(bill.gstAmt || 0)],
+    ...(bill.exchangeValue ? [["Old Exchange Deduction", formatINR(bill.exchangeValue)]] : []),
+    ["Net payable", formatINR(bill.finalTotal || 0)],
+    ["Paid amount", formatINR(bill.paidAmount || 0)],
+    ["Due amount", formatINR(bill.dueAmount || 0)]
   ];
-  drawRows(doc, totalsY + 10, totalRows);
+  doc.setFont("helvetica", "normal");
+  totalRows.forEach(([label, value]) => {
+    doc.text(label, 135, y);
+    doc.text(value, 195, y, { align: "right" });
+    y += 7;
+  });
 
   if (bill.cancelReason) {
     doc.setTextColor(168, 50, 50);
     doc.text(`Cancel reason: ${bill.cancelReason}`, 14, 214, { maxWidth: 180 });
     doc.setTextColor(33, 25, 21);
   }
-  addFooter(doc, settings);
+  addBillFooter(doc);
   return doc;
 }
 
@@ -274,4 +302,43 @@ export async function stockSummaryPdfBlob(summary, settings) {
   drawRows(doc, y, rows);
   addFooter(doc, settings);
   return doc.output("blob");
+}
+
+export async function downloadExchangeReportPdf(entries) {
+  const JsPDF = await getPdfCtor();
+  const doc = new JsPDF({ unit: "mm", format: "a4" });
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("Old Exchange Report", 105, 18, { align: "center" });
+  doc.setDrawColor(175, 146, 105);
+  doc.line(15, 25, 195, 25);
+  let y = 36;
+  doc.setFontSize(8);
+  doc.text("Date", 15, y);
+  doc.text("Customer", 35, y);
+  doc.text("Metal", 80, y);
+  doc.text("Item", 100, y);
+  doc.text("Gross", 142, y, { align: "right" });
+  doc.text("Value", 195, y, { align: "right" });
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  entries.forEach((entry, index) => {
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+    if (index % 2 === 0) {
+      doc.setFillColor(249, 245, 238);
+      doc.rect(15, y - 4, 180, 7, "F");
+    }
+    doc.text(formatDate(entry.dateISO), 15, y);
+    doc.text(safe(entry.customerName).slice(0, 24), 35, y);
+    doc.text(safe(entry.oldMetalType), 80, y);
+    doc.text(safe(entry.oldItemName).slice(0, 24), 100, y);
+    doc.text(String(entry.oldWeightGm || 0), 142, y, { align: "right" });
+    doc.text(String(entry.netExchangeValue || 0), 195, y, { align: "right" });
+    y += 7;
+  });
+  addBillFooter(doc);
+  doc.save(`OLD-EXCHANGE-REPORT-${new Date().toISOString().slice(0, 10)}.pdf`);
 }

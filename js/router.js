@@ -12,16 +12,6 @@ const routes = {
     subtitle: "One invoice with multiple gold and silver line items.",
     load: () => import("./modules/billing.js")
   },
-  "/gold-sales": {
-    title: "Gold Sales",
-    subtitle: "Gold billing with stock deduction, old jewellery exchange, and PDF bills.",
-    load: () => import("./modules/gold-sales.js")
-  },
-  "/silver-sales": {
-    title: "Silver Sales",
-    subtitle: "Silver billing with stock deduction, old jewellery exchange, and PDF bills.",
-    load: () => import("./modules/silver-sales.js")
-  },
   "/stock": {
     title: "Stock",
     subtitle: "Purchase lots, current stock, summaries, and adjustments.",
@@ -52,13 +42,10 @@ const routes = {
     subtitle: "Sales, stock, loans, dues, and readable charts.",
     load: () => import("./modules/reports.js")
   },
-  "/rates": {
-    title: "Reference Rates",
-    subtitle: "Manual reference rates for bill form prefills.",
-    load: async () => {
-      const module = await import("./modules/settings.js");
-      return { render: module.renderRates };
-    }
+  "/audit-log": {
+    title: "Audit Log",
+    subtitle: "All recorded changes and protected actions.",
+    load: () => import("./modules/audit-log.js")
   },
   "/backup": {
     title: "Backup / Restore",

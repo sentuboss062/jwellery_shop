@@ -17,6 +17,8 @@ import {
 } from "../helpers.js";
 import { addCreditPayment, getAll, getByKey, logAudit } from "../data-service.js";
 
+const DRAFT_KEY = "draft_credit_payment";
+
 let state = {
   credits: [],
   selectedCredit: null
@@ -90,15 +92,18 @@ function renderCreditTable(container) {
 async function promptPayment(container, creditId) {
   const credit = await getByKey("credits", creditId);
   if (!credit) return;
-  const result = await openDialog({
+  const draft = getPaymentDraft(creditId);
+  const dialogPromise = openDialog({
     title: "Add due payment",
     message: `Current balance is ${formatINR(credit.balanceAmount)}.`,
     fields: [
-      { name: "amount", label: "Payment amount", type: "number", required: true },
-      { name: "note", label: "Note", type: "textarea" }
+      { name: "amount", label: "Payment amount", type: "number", value: draft?.amount || "", required: true },
+      { name: "note", label: "Note", type: "textarea", value: draft?.note || "" }
     ],
     confirmText: "Save payment"
   });
+  wirePaymentDraft(creditId);
+  const result = await dialogPromise;
   if (!result) return;
   try {
     if (num(result.amount) > num(credit.balanceAmount)) {
@@ -106,6 +111,7 @@ async function promptPayment(container, creditId) {
     }
     state.selectedCredit = await addCreditPayment(creditId, num(result.amount), result.note || "");
     await logAudit("CREDIT_PAYMENT", "Credit", credit.billNo, "Due payment", `${formatINR(num(result.amount))} received.`);
+    clearPaymentDraft();
     state.credits = await getAll("credits");
     showToast("Due payment saved.", "success");
     renderCreditTable(container);
@@ -113,6 +119,44 @@ async function promptPayment(container, creditId) {
   } catch (error) {
     showToast(error.message, "error");
   }
+}
+
+function wirePaymentDraft(creditId) {
+  const form = $("#modal-root form");
+  if (!form) return;
+  let timer = null;
+  const save = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ creditId, ...collectForm(form), savedAt: Date.now() }));
+    }, 800);
+  };
+  form.addEventListener("input", save);
+  form.addEventListener("change", save);
+  window.addEventListener("beforeunload", () => {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ creditId, ...collectForm(form), savedAt: Date.now() }));
+  }, { once: true });
+}
+
+function getPaymentDraft(creditId) {
+  const raw = localStorage.getItem(DRAFT_KEY);
+  if (!raw) return null;
+  try {
+    const draft = JSON.parse(raw);
+    if (draft.creditId !== creditId || Date.now() - draft.savedAt > 86400000) {
+      clearPaymentDraft();
+      return null;
+    }
+    showToast("Due payment draft restored from your last session.", "info");
+    return draft;
+  } catch {
+    clearPaymentDraft();
+    return null;
+  }
+}
+
+function clearPaymentDraft() {
+  localStorage.removeItem(DRAFT_KEY);
 }
 
 function renderCreditDetail(container) {

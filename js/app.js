@@ -1,5 +1,5 @@
 import { $, collectForm, escapeHtml, requireText, showToast } from "./helpers.js";
-import { initializeDataStore, updateSettings, getSettings } from "./data-service.js";
+import { initializeDataStore, migrateLoanInterestV2, updateSettings, getSettings } from "./data-service.js";
 import { setOwnerPassword } from "./security.js";
 import { startRouter } from "./router.js";
 
@@ -11,6 +11,7 @@ async function bootstrap() {
   await registerServiceWorker();
 
   const settings = await initializeDataStore();
+  await runLoanInterestMigration();
   updateBrand(settings);
   updateOriginWarning(settings);
   if (!settings.ownerPasswordHash) {
@@ -18,6 +19,12 @@ async function bootstrap() {
     return;
   }
   await startRouter();
+}
+
+async function runLoanInterestMigration() {
+  if (localStorage.getItem("loanInterestMigrated_v2")) return;
+  await migrateLoanInterestV2();
+  localStorage.setItem("loanInterestMigrated_v2", "1");
 }
 
 function wireShell() {

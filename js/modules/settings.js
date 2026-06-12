@@ -55,6 +55,8 @@ export async function render(container) {
             <label class="field"><span>Gold invoice prefix</span><input name="goldInvoicePrefix" value="${escapeHtml(settings.goldInvoicePrefix || "G")}" required></label>
             <label class="field"><span>Silver invoice prefix</span><input name="silverInvoicePrefix" value="${escapeHtml(settings.silverInvoicePrefix || "S")}" required></label>
             <label class="field"><span>Loan prefix</span><input name="loanPrefix" value="${escapeHtml(settings.loanPrefix || "L")}" required></label>
+            <label class="field"><span>Daily Rate (%/day)</span><input name="loanDefaultDailyRate" type="number" min="0" step="0.01" value="${escapeHtml(settings.loanDefaultDailyRate ?? 0.07)}"></label>
+            <label class="field"><span>Monthly Rate (%/month)</span><input name="loanDefaultMonthlyRate" type="number" min="0" step="0.01" value="${escapeHtml(settings.loanDefaultMonthlyRate ?? 2)}"></label>
             <label class="field"><span>Financial year</span><input name="financialYear" value="${escapeHtml(settings.financialYear || "")}"></label>
             <label class="field full"><span>Shop address</span><textarea name="shopAddress">${escapeHtml(settings.shopAddress || "")}</textarea></label>
             <label class="field full"><span>Print footer text</span><textarea name="printFooterText">${escapeHtml(settings.printFooterText || "")}</textarea></label>
@@ -105,6 +107,8 @@ function wireSettings(container) {
       requireText(data.silverInvoicePrefix, "Silver invoice prefix");
       requireText(data.loanPrefix, "Loan prefix");
       requireNonNegative(data.defaultGstPct, "Default GST percentage");
+      requireNonNegative(data.loanDefaultDailyRate, "Default daily loan rate");
+      requireNonNegative(data.loanDefaultMonthlyRate, "Default monthly loan rate");
       const patch = {
         shopName: data.shopName,
         shopAddress: data.shopAddress,
@@ -115,6 +119,8 @@ function wireSettings(container) {
         goldInvoicePrefix: data.goldInvoicePrefix,
         silverInvoicePrefix: data.silverInvoicePrefix,
         loanPrefix: data.loanPrefix,
+        loanDefaultDailyRate: num(data.loanDefaultDailyRate),
+        loanDefaultMonthlyRate: num(data.loanDefaultMonthlyRate),
         financialYear: data.financialYear,
         printFooterText: data.printFooterText
       };
@@ -258,7 +264,7 @@ export async function renderBackup(container) {
         </div>
         <div class="notice warning">
           <strong>Before domain changes or browser cleanup</strong>
-          <span>Export a full ZIP. Browser storage belongs to the exact origin, so a new Netlify domain or custom domain has a different data bucket. Avoid private/incognito mode.</span>
+          <span>Export a full ZIP. Browser storage belongs to the exact origin, so a new Vercel domain or custom domain has a different data bucket. Avoid private/incognito mode.</span>
         </div>
         <div class="cards-grid">
           ${renderStorageCard(health, settings.lastBackupAt)}

@@ -133,8 +133,16 @@ export const countStoreRecords = countRecords;
 export async function getSettings() {
   const existing = await adapterGet("shopSettings", "main");
   if (existing) {
-    if (!existing.combinedInvoicePrefix) {
-      const updated = { ...existing, combinedInvoicePrefix: "B", updatedAt: isoNow() };
+    if (!existing.combinedInvoicePrefix || existing.loanDefaultDailyRate === undefined || existing.loanDefaultMonthlyRate === undefined || !existing.goldCategories || !existing.silverCategories) {
+      const updated = {
+        ...existing,
+        combinedInvoicePrefix: existing.combinedInvoicePrefix || "B",
+        loanDefaultDailyRate: existing.loanDefaultDailyRate ?? 0.07,
+        loanDefaultMonthlyRate: existing.loanDefaultMonthlyRate ?? 2,
+        goldCategories: existing.goldCategories || [],
+        silverCategories: existing.silverCategories || [],
+        updatedAt: isoNow()
+      };
       await adapterSave("shopSettings", updated);
       return updated;
     }
@@ -154,6 +162,10 @@ export async function getSettings() {
     goldInvoicePrefix: "G",
     silverInvoicePrefix: "S",
     loanPrefix: "L",
+    loanDefaultDailyRate: 0.07,
+    loanDefaultMonthlyRate: 2,
+    goldCategories: [],
+    silverCategories: [],
     defaultGstPct: 3,
     financialYear: deriveFinancialYear(),
     lastBackupAt: "",
@@ -237,6 +249,39 @@ export async function upsertCustomer(input) {
   return record;
 }
 
+export async function updateCustomer(customerId, patch) {
+  const current = await adapterGet("customers", customerId);
+  if (!current) throw new Error("Customer not found.");
+  const updated = {
+    ...current,
+    ...patch,
+    mobile: normalizeMobile(patch.mobile ?? current.mobile),
+    updatedAt: isoNow()
+  };
+  await adapterSave("customers", updated);
+  await logAudit("customer_edit", "Customer", customerId, "Customer updated", `${updated.name || current.name} profile updated.`);
+  return updated;
+}
+
+export async function softDeleteCustomer(customerId, reason = "Customer soft deleted") {
+  const current = await adapterGet("customers", customerId);
+  if (!current) throw new Error("Customer not found.");
+  const updated = { ...current, deleted: true, deletedAt: isoNow(), updatedAt: isoNow() };
+  await adapterSave("customers", updated);
+  await logAudit("customer_delete", "Customer", customerId, reason, `${current.name} was soft deleted.`);
+  return updated;
+}
+
+export async function updateKnownCategory(metalType, category) {
+  const value = String(category || "").trim();
+  if (!value) return;
+  const settings = await getSettings();
+  const key = metalType === "Silver" ? "silverCategories" : "goldCategories";
+  const existing = new Set(settings[key] || []);
+  existing.add(value);
+  await updateSettings({ [key]: Array.from(existing).sort((a, b) => a.localeCompare(b)) });
+}
+
 export async function listBillItems(billNo) {
   const items = await adapterList("billItems");
   return items.filter((item) => item.billNo === billNo).sort((a, b) => num(a.lineNo) - num(b.lineNo));
@@ -281,7 +326,8 @@ export async function hasSufficientStock(metalType, purity, category, weightGm) 
   const lots = await adapterList("stockLots");
   const total = lots
     .filter((lot) => lot.status !== "Deleted")
-    .filter((lot) => lot.metalType === metalType && lot.purity === purity && lot.category === category)
+    .filter((lot) => lot.metalType === metalType && lot.category === category)
+    .filter((lot) => metalType === "Silver" || String(lot.purity) === String(purity))
     .reduce((sum, lot) => sum + num(lot.availableWeightGm), 0);
   return roundWeight(total) >= roundWeight(weightGm);
 }
@@ -290,11 +336,12 @@ export async function assertSufficientStockForItems(items) {
   const grouped = new Map();
   items.forEach((item) => {
     const key = `${item.metalType}|${item.purity}|${item.category}`;
-    grouped.set(key, {
+    const normalizedKey = item.metalType === "Silver" ? `${item.metalType}|silver|${item.category}` : key;
+    grouped.set(normalizedKey, {
       metalType: item.metalType,
       purity: item.purity,
       category: item.category,
-      weightGm: roundWeight((grouped.get(key)?.weightGm || 0) + num(item.weightGm))
+      weightGm: roundWeight((grouped.get(normalizedKey)?.weightGm || 0) + num(item.weightGm))
     });
   });
   for (const item of grouped.values()) {
@@ -307,7 +354,8 @@ export async function assertSufficientStockForItems(items) {
 export async function deductStockForSale({ metalType, purity, category, weightGm, refId, dateISO, lineId = "" }) {
   const lots = (await adapterList("stockLots"))
     .filter((lot) => lot.status !== "Deleted")
-    .filter((lot) => lot.metalType === metalType && lot.purity === purity && lot.category === category)
+    .filter((lot) => lot.metalType === metalType && lot.category === category)
+    .filter((lot) => metalType === "Silver" || String(lot.purity) === String(purity))
     .filter((lot) => num(lot.availableWeightGm) > 0)
     .sort((a, b) => String(a.purchaseDateISO).localeCompare(String(b.purchaseDateISO)));
   let remaining = roundWeight(weightGm);
@@ -322,6 +370,7 @@ export async function deductStockForSale({ metalType, purity, category, weightGm
     await adapterSave("stockLots", {
       ...lot,
       availableWeightGm: nextWeight,
+      availableNetWeightGm: nextWeight,
       status: nextWeight <= 0 ? "Sold Out" : "Available",
       updatedAt: isoNow()
     });
@@ -329,6 +378,7 @@ export async function deductStockForSale({ metalType, purity, category, weightGm
       movementId: randomId("MOV"),
       dateISO,
       refType: "SALE",
+      type: "sale",
       refId,
       lineId,
       stockId: lot.stockId,
@@ -336,6 +386,8 @@ export async function deductStockForSale({ metalType, purity, category, weightGm
       purity,
       category,
       deltaWeightGm: -roundWeight(take),
+      deltaGross: -roundWeight(take),
+      deltaNet: -roundWeight(take),
       reason: `Sold against ${refId}`
     });
     remaining = roundWeight(remaining - take);
@@ -365,6 +417,7 @@ export async function restoreStockForSale(refId, reason = "Bill cancelled") {
     await adapterSave("stockLots", {
       ...lot,
       availableWeightGm: roundWeight(num(lot.availableWeightGm) + restoredWeight),
+      availableNetWeightGm: roundWeight(num(lot.availableNetWeightGm, lot.availableWeightGm) + restoredWeight),
       status: "Available",
       updatedAt: isoNow()
     });
@@ -379,6 +432,8 @@ export async function restoreStockForSale(refId, reason = "Bill cancelled") {
       purity: movement.purity,
       category: movement.category,
       deltaWeightGm: roundWeight(restoredWeight),
+      deltaGross: roundWeight(restoredWeight),
+      deltaNet: roundWeight(restoredWeight),
       reason
     });
   }
@@ -392,6 +447,7 @@ export async function adjustStock(stockId, deltaWeightGm, reason) {
   await adapterSave("stockLots", {
     ...lot,
     availableWeightGm: nextWeight,
+    availableNetWeightGm: nextWeight,
     status: nextWeight <= 0 ? "Sold Out" : "Available",
     updatedAt: isoNow()
   });
@@ -428,6 +484,7 @@ export async function saveCombinedBill({ bill, items, exchangeRecord, editingBil
   }
   await adapterSave("bills", bill);
   for (const item of items) await adapterSave("billItems", item);
+  for (const item of items) await updateKnownCategory(item.metalType, item.category);
   await deductStockForBillItems(bill.billNo, bill.dateISO, items);
   await upsertCustomer(bill);
   if (exchangeRecord) await adapterSave("exchangeEntries", exchangeRecord);
@@ -575,6 +632,19 @@ export async function resetAllData() {
   for (const storeName of STORE_NAMES) await adapterClear(storeName);
   await getSettings();
   await logAudit("RESET", "Database", "jewellery_portal", "App reset", "All records were reset.");
+}
+
+export async function migrateLoanInterestV2() {
+  const loans = await adapterList("loans");
+  for (const loan of loans.filter((entry) => !["Closed", "Void"].includes(entry.status))) {
+    await adapterSave("loans", {
+      ...loan,
+      dailyRatePercent: loan.dailyRatePercent ?? loan.loanDefaultDailyRate ?? 0.07,
+      monthlyRatePercent: loan.monthlyRatePercent ?? loan.loanDefaultMonthlyRate ?? 2,
+      interestAccrued: calculateLoanInterest(loan),
+      updatedAt: isoNow()
+    });
+  }
 }
 
 export async function summarizeData() {
