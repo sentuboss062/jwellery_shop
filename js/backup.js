@@ -14,7 +14,7 @@ import { DB_VERSION } from "./db.js";
 import { addRecord, exportAllStores, getActiveShopId, getSettings, listNormalizedBills, logAudit, replaceStores, updateSettings } from "./data-service.js";
 import { billPdfBlob, loanPdfBlob, stockSummaryPdfBlob } from "./pdf.js";
 import { ensureOwnerPassword } from "./security.js";
-import { createCloudBackup, listCloudBackups } from "./api-client.js";
+import * as apiClient from "./api-client.js";
 
 async function getZipCtor() {
   return waitForGlobal("JSZip");
@@ -122,10 +122,13 @@ export async function exportFullZip(options = {}) {
 }
 
 export async function createSupabaseCloudBackup() {
+  if (typeof apiClient.createCloudBackup !== "function") {
+    throw new Error("Cloud backup API is not loaded yet. Hard refresh the app after deployment.");
+  }
   const data = await exportAllStores();
   const manifest = backupManifest(data, "supabase-database");
   const fileName = `cloud-backup-${manifest.shopId}-${todayInputValue()}-${Date.now()}.json`;
-  const result = await createCloudBackup({ fileName, manifest, stores: data });
+  const result = await apiClient.createCloudBackup({ fileName, manifest, stores: data });
   await updateSettings({ lastBackupAt: manifest.exportedAt });
   await addRecord("backupMeta", {
     backupId: result.backupId || `CLOUD-${Date.now()}`,
@@ -144,7 +147,8 @@ export async function createSupabaseCloudBackup() {
 
 export async function getSupabaseCloudBackups() {
   try {
-    return await listCloudBackups();
+    if (typeof apiClient.listCloudBackups !== "function") return [];
+    return await apiClient.listCloudBackups();
   } catch {
     return [];
   }
