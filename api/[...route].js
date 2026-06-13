@@ -155,6 +155,10 @@ function listQuery(req) {
   const params = url.searchParams;
   params.delete("store");
   params.delete("key");
+  params.delete("route");
+  params.delete("path");
+  params.delete("...route");
+  params.delete("[...route]");
   if (!params.has("limit")) params.set("limit", "100");
   if (!params.has("order")) params.set("order", "updated_at.desc");
   const limit = Math.min(Math.max(Number(params.get("limit") || 100), 1), 500);
@@ -247,15 +251,27 @@ function sanitizeRecord(record) {
   return Object.fromEntries(Object.entries(record).filter(([key, value]) => key.length <= 80 && typeof value !== "function"));
 }
 
+function supabaseBaseUrl() {
+  const rawUrl = String(process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
+  if (!rawUrl) {
+    throw new Error("SUPABASE_URL is required.");
+  }
+  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(rawUrl)) {
+    throw new Error("SUPABASE_URL must be your Supabase Project URL, like https://xxxx.supabase.co. Do not use the Supabase dashboard URL.");
+  }
+  return rawUrl;
+}
+
 function requireEnv() {
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.");
+  supabaseBaseUrl();
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required.");
   }
 }
 
 async function supabaseRequest(table, query = "", options = {}) {
   requireEnv();
-  const url = `${process.env.SUPABASE_URL}/rest/v1/${table}${query ? `?${query}` : ""}`;
+  const url = `${supabaseBaseUrl()}/rest/v1/${table}${query ? `?${query}` : ""}`;
   const response = await fetch(url, {
     method: options.method || "GET",
     body: options.body,
