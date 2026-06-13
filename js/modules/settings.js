@@ -18,12 +18,10 @@ import {
 } from "../helpers.js";
 import {
   getAll,
-  getActiveShopId,
   getSettings,
   logAudit,
   resetAllData,
   saveRate,
-  setActiveShopId,
   updateSettings
 } from "../data-service.js";
 import { createSupabaseCloudBackup, exportFullZip, exportJsonOnly, getSupabaseCloudBackups, restoreBackupFromFile } from "../backup.js";
@@ -31,7 +29,6 @@ import { requestPersistentStorage, getStorageHealth, renderStorageCard } from ".
 import { ensureOwnerPassword, setOwnerPassword } from "../security.js";
 
 export async function render(container) {
-  const activeShopId = getActiveShopId();
   const [settings, auditLog, health] = await Promise.all([
     getSettings(),
     getAll("auditLog"),
@@ -45,17 +42,8 @@ export async function render(container) {
         <div class="section-header">
           <div>
             <h2>Shop Settings</h2>
-            <p>Basic bill details, active shop identity, owner password, and print footer.</p>
+            <p>Basic bill details, owner password, and print footer.</p>
           </div>
-        </div>
-        <form id="shop-context-form" class="form-grid">
-          <label class="field"><span>Active shop ID</span><input name="shopId" value="${escapeHtml(activeShopId)}" required></label>
-          <label class="field"><span>Shop user / login label</span><input name="shopUserLabel" value="${escapeHtml(settings.shopUserLabel || "")}" placeholder="Owner name or login id"></label>
-          <div class="field"><span class="label">&nbsp;</span><button class="button-secondary" type="submit">Switch / Save Shop</button></div>
-        </form>
-        <div class="notice warning">
-          <strong>Multi-shop data separation</strong>
-          <span>Use a different shop ID for each shopkeeper before creating records. Existing records stay under their original shop ID.</span>
         </div>
         <form id="settings-form" class="page-grid">
           <div class="form-grid">
@@ -108,21 +96,6 @@ export async function render(container) {
 }
 
 function wireSettings(container) {
-  $("#shop-context-form", container).addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const data = collectForm(event.currentTarget);
-      requireText(data.shopId, "Active shop ID");
-      const shopId = setActiveShopId(data.shopId);
-      await updateSettings({ shopId, shopUserLabel: data.shopUserLabel || "" });
-      await logAudit("SHOP_CONTEXT_UPDATE", "Shop", shopId, "Shop context saved", "Active shop identity updated.");
-      showToast("Shop saved. Reloading this shop data.", "success");
-      setTimeout(() => location.reload(), 500);
-    } catch (error) {
-      showToast(error.message, "error");
-    }
-  });
-
   $("#settings-form", container).addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -278,7 +251,6 @@ export async function renderRates(container) {
 
 export async function renderBackup(container) {
   const [settings, health, cloudBackups] = await Promise.all([getSettings(), getStorageHealth(), getSupabaseCloudBackups()]);
-  const activeShopId = getActiveShopId();
   const originMismatch = settings.productionOrigin && settings.productionOrigin !== location.origin;
   container.innerHTML = `
     <div class="page-grid">
@@ -287,7 +259,7 @@ export async function renderBackup(container) {
         <div class="section-header">
           <div>
             <h2>Backup / Restore</h2>
-            <p>Export local ZIP backups or save a full JSON snapshot directly in Supabase for the active shop.</p>
+            <p>Export local ZIP backups or save a full JSON snapshot directly in Supabase.</p>
           </div>
         </div>
         <div class="notice warning">
@@ -297,7 +269,6 @@ export async function renderBackup(container) {
         <div class="cards-grid">
           ${renderStorageCard(health, settings.lastBackupAt)}
           <div class="metric-card"><small>Current origin</small><strong>${escapeHtml(location.origin)}</strong><span>Exported in manifest</span></div>
-          <div class="metric-card"><small>Active shop</small><strong>${escapeHtml(activeShopId)}</strong><span>Cloud backups are saved for this shop ID</span></div>
         </div>
         <div class="actions-row">
           <button class="button" type="button" data-cloud-backup>Create Cloud Backup</button>
@@ -315,13 +286,12 @@ export async function renderBackup(container) {
         <div class="section-header">
           <div>
             <h2>Supabase Cloud Backups</h2>
-            <p>Recent database-saved snapshots for the active shop.</p>
+            <p>Recent database-saved snapshots.</p>
           </div>
         </div>
         ${renderTable([
           { label: "Created", render: (row) => formatDateTime(row.created_at || row.createdAt) },
           { label: "File", render: (row) => escapeHtml(row.file_name || row.fileName || "-") },
-          { label: "Shop", render: (row) => escapeHtml(row.shop_id || row.shopId || activeShopId) },
           { label: "Records", render: (row) => escapeHtml(Object.entries(row.record_counts || row.recordCounts || {}).map(([key, value]) => `${key}: ${value}`).join(", ") || "-") },
           { label: "Version", render: (row) => escapeHtml(row.app_version || row.appVersion || "-") }
         ], cloudBackups, "No cloud backups saved for this shop yet.")}

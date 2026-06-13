@@ -1,5 +1,6 @@
 const DEFAULT_API_BASE = "/api";
 const SHOP_CONTEXT_KEY = "jewellery_portal_active_shop_id";
+const SINGLE_SHOP_ID = "main";
 
 let apiBase = DEFAULT_API_BASE;
 let apiAvailable = null;
@@ -71,14 +72,13 @@ async function request(path, options = {}, ownerHash = "") {
 }
 
 export function getActiveShopId() {
-  if (typeof localStorage === "undefined") return "main";
-  return normalizeShopId(localStorage.getItem(SHOP_CONTEXT_KEY) || "main");
+  if (typeof localStorage !== "undefined") localStorage.removeItem(SHOP_CONTEXT_KEY);
+  return SINGLE_SHOP_ID;
 }
 
-export function setActiveShopId(shopId) {
-  const normalized = normalizeShopId(shopId);
-  if (typeof localStorage !== "undefined") localStorage.setItem(SHOP_CONTEXT_KEY, normalized);
-  return normalized;
+export function setActiveShopId() {
+  if (typeof localStorage !== "undefined") localStorage.removeItem(SHOP_CONTEXT_KEY);
+  return SINGLE_SHOP_ID;
 }
 
 export function normalizeShopId(value) {

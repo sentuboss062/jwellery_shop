@@ -60,11 +60,11 @@ Security notes:
 
 Backend tables include: `shops`, `shop_users`, `shops_settings`, `app_users`, `customers`, `bills`, `bill_items`, `legacy_gold_bills`, `legacy_silver_bills`, `stock_lots`, `stock_movements`, `exchange_entries`, `credits`, `credit_payments`, `loans`, `loan_payments`, `rates`, `audit_log`, `backup_meta`, and `cloud_backups`.
 
-## Multi-Shop Mode
+## Shop Mode
 
-The app supports an active shop ID. Open **Settings** and set a different **Active shop ID** for each shopkeeper before entering data. The frontend sends that shop ID to the Vercel API as `x-shop-id`; the API scopes Supabase records by shop so one deployed site can serve multiple shops.
+This version is configured for one shop. The app always uses the internal shop ID `main`, so records do not disappear because of a shop selector or shop ID mismatch.
 
-Existing data remains under the default shop ID `main`. For a production multi-shop rollout, use a clear shop ID such as `sentu-main`, `branch-family`, or each shopkeeper's login label. This version uses shop-level owner password protection and API token protection; it is not full Supabase Auth user login.
+The backend schema keeps `shops`, `shop_users`, and `shop_id` fields so the project can be upgraded to multi-shop later, but the shopkeeper-facing multi-shop controls are intentionally hidden in this version.
 
 ## Vercel Deployment
 
@@ -109,7 +109,7 @@ Individual PDFs are downloaded by the browser. The app does not claim to write r
 
 Restore requires the owner password. The app downloads a pre-restore ZIP backup first, validates database version, imports JSON stores, and shows imported counts.
 
-The Backup / Restore screen also includes **Create Cloud Backup**. This saves a full JSON snapshot for the active shop directly in the Supabase `cloud_backups` table and records metadata in `backup_meta`. Run the latest `supabase/schema.sql` before using it on an existing Supabase project.
+The Backup / Restore screen also includes **Create Cloud Backup**. This saves a full JSON snapshot directly in the Supabase `cloud_backups` table and records metadata in `backup_meta`. Run the latest `supabase/schema.sql` before using it on an existing Supabase project.
 
 ## Owner Password
 
