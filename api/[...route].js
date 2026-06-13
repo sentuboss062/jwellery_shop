@@ -64,13 +64,17 @@ export default async function handler(req, res) {
     if (resource === "verify-owner" && req.method === "POST") {
       const { ownerHash } = await readBody(req);
       if (!ownerHash) return sendJson(res, 400, { error: "Missing ownerHash" });
-      return sendJson(res, 200, { valid: ownerHash === await getStoredOwnerHash() });
+      return sendJson(res, 200, { valid: ownerHash === await getStoredOwnerHash(getShopId(req)) });
     }
 
     checkApiToken(req);
 
     if (resource === "records") {
       return await handleRecordRoute(req, res, path);
+    }
+
+    if (resource === "cloud-backups") {
+      return await handleCloudBackupRoute(req, res);
     }
 
     if (STORE_TABLES[resource]) {
@@ -85,10 +89,12 @@ export default async function handler(req, res) {
 
 async function handleRecordRoute(req, res, path) {
   const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
+  const shopId = getShopId(req);
   const storeName = path[1] || url.searchParams.get("store");
   const store = STORE_TABLES[storeName];
   if (!store) return sendJson(res, 400, { error: `Unsupported store: ${storeName}` });
   const key = path[2] ? decodeURIComponent(path[2]) : url.searchParams.get("key") || "";
+  const rowKey = scopedRowKey(shopId, key);
 
   if (req.method === "DELETE") {
     if (!key) return sendJson(res, 405, { error: "DELETE without an id is not allowed" });
@@ -100,14 +106,15 @@ async function handleRecordRoute(req, res, path) {
   }
 
   if (req.method === "GET" && key) {
-    const rows = await supabaseRequest(store.table, `select=payload&${store.key}=eq.${encodeURIComponent(key)}&limit=1`);
+    const rows = await supabaseRequest(store.table, `select=${store.key},payload&${store.key}=eq.${encodeURIComponent(rowKey)}&limit=1`);
     return sendJson(res, 200, { record: rows[0]?.payload || null });
   }
 
   if (req.method === "GET") {
     const query = listQuery(req);
-    const rows = await supabaseRequest(store.table, `select=payload&${query}`);
-    return sendJson(res, 200, { records: rows.map((row) => row.payload) });
+    const rows = await supabaseRequest(store.table, `select=${store.key},payload&${query}`);
+    const records = rows.filter((row) => rowBelongsToShop(row, store.key, shopId)).map((row) => row.payload);
+    return sendJson(res, 200, { records });
   }
 
   if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
@@ -117,7 +124,8 @@ async function handleRecordRoute(req, res, path) {
     const recordKey = record[KEY_FIELDS[storeName]];
     if (!recordKey) return sendJson(res, 400, { error: `${KEY_FIELDS[storeName]} is required.` });
 
-    const row = { [store.key]: recordKey, payload: sanitizeRecord(record), updated_at: new Date().toISOString() };
+    const payload = { ...sanitizeRecord(record), shopId };
+    const row = { [store.key]: scopedRowKey(shopId, recordKey), payload, updated_at: new Date().toISOString() };
     await supabaseRequest(store.table, `on_conflict=${store.key}`, {
       method: "POST",
       headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
@@ -128,18 +136,65 @@ async function handleRecordRoute(req, res, path) {
 
   if (req.method === "DELETE") {
     if (storeName === "customers") {
-      const existing = await supabaseRequest(store.table, `select=payload&${store.key}=eq.${encodeURIComponent(key)}&limit=1`);
+      const existing = await supabaseRequest(store.table, `select=payload&${store.key}=eq.${encodeURIComponent(rowKey)}&limit=1`);
       const payload = { ...(existing[0]?.payload || {}), deleted: true, deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       await supabaseRequest(store.table, `on_conflict=${store.key}`, {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({ [store.key]: key, payload, updated_at: new Date().toISOString() })
+        body: JSON.stringify({ [store.key]: rowKey, payload, updated_at: new Date().toISOString() })
       });
       return sendJson(res, 200, { ok: true, softDeleted: true });
     }
 
-    await supabaseRequest(store.table, `${store.key}=eq.${encodeURIComponent(key)}`, { method: "DELETE" });
+    await supabaseRequest(store.table, `${store.key}=eq.${encodeURIComponent(rowKey)}`, { method: "DELETE" });
     return sendJson(res, 200, { ok: true });
+  }
+
+  return sendJson(res, 405, { error: "Method not allowed." });
+}
+
+async function handleCloudBackupRoute(req, res) {
+  const shopId = getShopId(req);
+  const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
+
+  if (req.method === "GET" && url.searchParams.get("key")) {
+    const key = url.searchParams.get("key");
+    const rows = await supabaseRequest("cloud_backups", `select=payload&backup_id=eq.${encodeURIComponent(key)}&shop_id=eq.${encodeURIComponent(shopId)}&limit=1`);
+    return sendJson(res, 200, { backup: rows[0]?.payload || null });
+  }
+
+  if (req.method === "GET") {
+    const rows = await supabaseRequest("cloud_backups", `select=backup_id,shop_id,file_name,created_at,record_counts,app_version,origin_at_export&shop_id=eq.${encodeURIComponent(shopId)}&order=created_at.desc&limit=25`);
+    return sendJson(res, 200, { backups: rows });
+  }
+
+  if (req.method === "POST") {
+    const body = await readBody(req);
+    if (!body?.manifest || !body?.stores) return sendJson(res, 400, { error: "Backup manifest and stores are required." });
+    const backupId = `CLOUD-${shopId}-${Date.now()}`;
+    const createdAt = body.manifest.exportedAt || new Date().toISOString();
+    const payload = {
+      backupId,
+      shopId,
+      fileName: body.fileName || `${backupId}.json`,
+      manifest: { ...body.manifest, shopId },
+      stores: body.stores
+    };
+    await supabaseRequest("cloud_backups", "on_conflict=backup_id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        backup_id: backupId,
+        shop_id: shopId,
+        file_name: payload.fileName,
+        created_at: createdAt,
+        record_counts: body.manifest.recordCounts || {},
+        app_version: body.manifest.appVersion || "",
+        origin_at_export: body.manifest.originAtExport || "",
+        payload
+      })
+    });
+    return sendJson(res, 200, { ok: true, backupId, fileName: payload.fileName, createdAt });
   }
 
   return sendJson(res, 405, { error: "Method not allowed." });
@@ -164,6 +219,28 @@ function listQuery(req) {
   const limit = Math.min(Math.max(Number(params.get("limit") || 100), 1), 500);
   params.set("limit", String(limit));
   return params.toString();
+}
+
+function getShopId(req) {
+  const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
+  return normalizeShopId(req.headers["x-shop-id"] || url.searchParams.get("shopId") || "main");
+}
+
+function normalizeShopId(value) {
+  return String(value || "main").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "main";
+}
+
+function scopedRowKey(shopId, key) {
+  if (!key) return key;
+  return shopId === "main" ? key : `${shopId}:${key}`;
+}
+
+function rowBelongsToShop(row, keyField, shopId) {
+  const payloadShopId = row.payload?.shopId;
+  if (payloadShopId) return payloadShopId === shopId;
+  const rowKey = String(row[keyField] || "");
+  if (shopId === "main") return !rowKey.includes(":");
+  return rowKey.startsWith(`${shopId}:`);
 }
 
 function setCorsHeaders(req, res) {
@@ -202,7 +279,7 @@ function checkApiToken(req) {
 
 async function assertOwnerWriteAllowed(req, storeName) {
   if (OPEN_WRITE_STORES.has(storeName)) return;
-  const stored = await getStoredOwnerHash();
+  const stored = await getStoredOwnerHash(getShopId(req));
   if (!stored) return;
   const incoming = req.headers["x-owner-hash"] || "";
   if (!incoming) {
@@ -217,8 +294,8 @@ async function assertOwnerWriteAllowed(req, storeName) {
   }
 }
 
-async function getStoredOwnerHash() {
-  const rows = await supabaseRequest("shops_settings", "select=payload&id=eq.main&limit=1");
+async function getStoredOwnerHash(shopId = "main") {
+  const rows = await supabaseRequest("shops_settings", `select=payload&id=eq.${encodeURIComponent(scopedRowKey(shopId, "main"))}&limit=1`);
   const payload = rows[0]?.payload || {};
   return payload.ownerPasswordHash || payload.owner_pw_hash || "";
 }

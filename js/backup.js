@@ -11,9 +11,10 @@ import {
   waitForGlobal
 } from "./helpers.js";
 import { DB_VERSION } from "./db.js";
-import { addRecord, exportAllStores, getSettings, listNormalizedBills, logAudit, replaceStores, updateSettings } from "./data-service.js";
+import { addRecord, exportAllStores, getActiveShopId, getSettings, listNormalizedBills, logAudit, replaceStores, updateSettings } from "./data-service.js";
 import { billPdfBlob, loanPdfBlob, stockSummaryPdfBlob } from "./pdf.js";
 import { ensureOwnerPassword } from "./security.js";
+import { createCloudBackup, listCloudBackups } from "./api-client.js";
 
 async function getZipCtor() {
   return waitForGlobal("JSZip");
@@ -21,6 +22,18 @@ async function getZipCtor() {
 
 function countRecords(data) {
   return Object.fromEntries(STORE_NAMES.map((name) => [name, Array.isArray(data[name]) ? data[name].length : 0]));
+}
+
+function backupManifest(data, type = "json") {
+  return {
+    appVersion: APP_VERSION,
+    dbVersion: DB_VERSION,
+    exportedAt: isoNow(),
+    originAtExport: location.origin,
+    shopId: getActiveShopId(),
+    backupType: type,
+    recordCounts: countRecords(data)
+  };
 }
 
 function summarizeStock(stockLots) {
@@ -44,13 +57,7 @@ function summarizeStock(stockLots) {
 
 export async function exportJsonOnly() {
   const data = await exportAllStores();
-  const manifest = {
-    appVersion: APP_VERSION,
-    dbVersion: DB_VERSION,
-    exportedAt: isoNow(),
-    originAtExport: location.origin,
-    recordCounts: countRecords(data)
-  };
+  const manifest = backupManifest(data, "json-download");
   const blob = new Blob([JSON.stringify({ manifest, stores: data }, null, 2)], { type: "application/json" });
   downloadBlob(blob, `jewellery-json-backup-${todayInputValue()}.json`);
   await updateSettings({ lastBackupAt: manifest.exportedAt });
@@ -71,11 +78,7 @@ export async function exportFullZip(options = {}) {
   const data = await exportAllStores();
   const settings = await getSettings();
   const manifest = {
-    appVersion: APP_VERSION,
-    dbVersion: DB_VERSION,
-    exportedAt: isoNow(),
-    originAtExport: location.origin,
-    recordCounts: countRecords(data),
+    ...backupManifest(data, "zip-download"),
     note: "Browser-local IndexedDB backup for Jewellery Shop Portal."
   };
 
@@ -116,6 +119,35 @@ export async function exportFullZip(options = {}) {
   await logAudit("BACKUP_EXPORT", "Backup", fileName, "Manual export", "Full ZIP backup exported.");
   showToast("Full ZIP backup exported.", "success");
   return { blob, fileName, manifest };
+}
+
+export async function createSupabaseCloudBackup() {
+  const data = await exportAllStores();
+  const manifest = backupManifest(data, "supabase-database");
+  const fileName = `cloud-backup-${manifest.shopId}-${todayInputValue()}-${Date.now()}.json`;
+  const result = await createCloudBackup({ fileName, manifest, stores: data });
+  await updateSettings({ lastBackupAt: manifest.exportedAt });
+  await addRecord("backupMeta", {
+    backupId: result.backupId || `CLOUD-${Date.now()}`,
+    fileName,
+    createdAt: manifest.exportedAt,
+    recordCounts: manifest.recordCounts,
+    appVersion: APP_VERSION,
+    originAtExport: location.origin,
+    cloud: true,
+    shopId: manifest.shopId
+  });
+  await logAudit("BACKUP_CLOUD_CREATE", "Backup", result.backupId || fileName, "Manual cloud backup", "Full JSON backup saved in Supabase database.");
+  showToast("Cloud backup saved in Supabase.", "success");
+  return result;
+}
+
+export async function getSupabaseCloudBackups() {
+  try {
+    return await listCloudBackups();
+  } catch {
+    return [];
+  }
 }
 
 async function readBackupFile(file) {

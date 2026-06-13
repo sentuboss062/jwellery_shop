@@ -1,4 +1,4 @@
-const CACHE_VERSION = "jewellery-portal-v1.2.2";
+const CACHE_VERSION = "jewellery-portal-v1.3.0";
 const APP_SHELL = [
   "/",
   "/index.html",

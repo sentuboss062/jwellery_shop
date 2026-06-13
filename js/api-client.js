@@ -1,4 +1,5 @@
 const DEFAULT_API_BASE = "/api";
+const SHOP_CONTEXT_KEY = "jewellery_portal_active_shop_id";
 
 let apiBase = DEFAULT_API_BASE;
 let apiAvailable = null;
@@ -49,11 +50,13 @@ export function resetApiAvailability() {
 
 async function request(path, options = {}, ownerHash = "") {
   await loadApiConfig();
+  const shopId = getActiveShopId();
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      "x-shop-id": shopId,
       ...(apiToken ? { "x-api-token": apiToken } : {}),
       ...(ownerHash ? { "x-owner-hash": ownerHash } : {}),
       ...(options.headers || {})
@@ -65,6 +68,21 @@ async function request(path, options = {}, ownerHash = "") {
     throw new Error(payload?.error || `API request failed: ${response.status}`);
   }
   return payload;
+}
+
+export function getActiveShopId() {
+  if (typeof localStorage === "undefined") return "main";
+  return normalizeShopId(localStorage.getItem(SHOP_CONTEXT_KEY) || "main");
+}
+
+export function setActiveShopId(shopId) {
+  const normalized = normalizeShopId(shopId);
+  if (typeof localStorage !== "undefined") localStorage.setItem(SHOP_CONTEXT_KEY, normalized);
+  return normalized;
+}
+
+export function normalizeShopId(value) {
+  return String(value || "main").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "main";
 }
 
 export function listRecords(storeName, params = "") {
@@ -115,6 +133,21 @@ export function clearRecords(storeName, ownerHash = "") {
   }, ownerHash).then((payload) => payload.ok);
 }
 
+export function createCloudBackup(snapshot, ownerHash = "") {
+  return request("/cloud-backups", {
+    method: "POST",
+    body: JSON.stringify(snapshot)
+  }, ownerHash);
+}
+
+export function listCloudBackups() {
+  return request("/cloud-backups").then((payload) => payload.backups || []);
+}
+
+export function getCloudBackup(backupId) {
+  return request(`/cloud-backups?key=${encodeURIComponent(backupId)}`).then((payload) => payload.backup || null);
+}
+
 function recordQuery(storeName, key = "", extra = "") {
   const params = new URLSearchParams(extra || "");
   params.set("store", storeName);
@@ -128,7 +161,10 @@ export const api = {
   get: (storeName, key) => getRecord(storeName, key),
   save: (storeName, record, ownerHash) => saveRecord(storeName, record, ownerHash),
   update: (storeName, key, record, ownerHash) => updateRecord(storeName, key, record, ownerHash),
-  remove: (storeName, key, ownerHash) => deleteRecord(storeName, key, ownerHash)
+  remove: (storeName, key, ownerHash) => deleteRecord(storeName, key, ownerHash),
+  createCloudBackup,
+  listCloudBackups,
+  getCloudBackup
 };
 
 export default api;
