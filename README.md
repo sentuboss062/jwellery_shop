@@ -23,7 +23,7 @@ Pinned CDN files used by `index.html` and cached by `sw.js`:
 
 The frontend has no build step. `db.js` is the IndexedDB fallback adapter. `api-client.js` talks to `/api` when Supabase environment variables are configured. UI modules do not call IndexedDB directly; they use `data-service.js`.
 
-When the API health check succeeds, business records are saved through Vercel Functions into Supabase. When the API is unavailable, the app uses browser-local IndexedDB so local/offline work still functions. Browser-local fallback data is not synced across devices, browsers, profiles, or domains.
+When the API health check succeeds, business records are saved through Vercel Functions into Supabase. Failed API writes are queued in IndexedDB and retried when the browser comes back online. Browser-local fallback data is not synced across devices, browsers, profiles, or domains unless the API is reachable and the sync queue can replay.
 
 ## Combined Billing
 
@@ -35,21 +35,34 @@ Rates are managed manually from the dashboard. The app prompts for today's gold 
 
 Stock lots support gross weight, wastage percentage, net weight, and independent gross/net adjustments. Silver entries do not require purity. Gold purity uses preset fineness values with a custom option.
 
-## Backend Setup
+## Backend Setup (Vercel + Supabase)
 
 1. Create a Supabase project.
-2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Add Vercel environment variables from `.env.example`.
+2. In Supabase SQL Editor, run `supabase/schema.sql`.
+3. In Vercel dashboard -> Project -> Settings -> Environment Variables, add:
+   - `SUPABASE_URL` - your Supabase project URL
+   - `SUPABASE_SERVICE_ROLE_KEY` - service role key, never expose in frontend code
+   - `API_SECRET_TOKEN` - a random secret string for API requests
+   - `ALLOWED_ORIGIN` - your Vercel URL, for example `https://jwellery-shop-nu.vercel.app`
 4. Deploy the folder to Vercel.
 5. Visit `/api/health`; it should return `{ "ok": true, "storage": "supabase", "platform": "vercel" }`.
+6. Optional: set up Uptime Robot to ping `/api/health` every 5 minutes.
 
 `SUPABASE_SERVICE_ROLE_KEY` must be stored only in Vercel environment variables. Do not expose it in frontend JavaScript.
+
+Security notes:
+
+- CORS is restricted to `ALLOWED_ORIGIN`, with localhost allowed for development.
+- API token checking is supported through `API_SECRET_TOKEN`.
+- Write operations require the stored owner password hash where a hash already exists.
+- Full-store backend deletes are blocked.
+- Basic in-memory rate limiting is enabled for the Vercel API.
 
 Backend tables include: `shops_settings`, `app_users`, `customers`, `bills`, `bill_items`, `legacy_gold_bills`, `legacy_silver_bills`, `stock_lots`, `stock_movements`, `exchange_entries`, `credits`, `credit_payments`, `loans`, `loan_payments`, `rates`, `audit_log`, and `backup_meta`.
 
 ## Vercel Deployment
 
-`vercel.json` serves the static app from the project root and uses `api/[...path].js` for the Supabase-backed API. `index.html` and `sw.js` are served with `Cache-Control: no-cache` to reduce update problems.
+`vercel.json` serves the static app from the project root and uses `api/[...route].js` for the Supabase-backed API. `index.html` and `sw.js` are served with `Cache-Control: no-cache` to reduce update problems.
 
 Recommended Vercel project settings:
 
@@ -69,7 +82,7 @@ vercel --prod
 
 The frontend can run on any static host that serves the folder over HTTPS, including Cloudflare Pages, GitHub Pages, or a local LAN web server. Hash routing means no server rewrite is needed for screens such as `#/dashboard`.
 
-For the optional backend, the host must support a compatible serverless API. The included API is written as a Vercel Function, so on Render, Cloudflare, or another platform you must port `api/[...path].js` to that platform's function format or keep the app in IndexedDB fallback mode.
+For the optional backend, the host must support a compatible serverless API. The included API is written as a Vercel Function, so on Render, Cloudflare, or another platform you must port `api/[...route].js` to that platform's function format or keep the app in IndexedDB fallback mode.
 
 ## Offline Mode
 

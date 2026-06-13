@@ -1,6 +1,8 @@
 import { $, collectForm, escapeHtml, requireText, showToast } from "./helpers.js";
 import { initializeDataStore, migrateLoanInterestV2, updateSettings, getSettings } from "./data-service.js";
+import { loadApiConfig } from "./api-client.js";
 import { setOwnerPassword } from "./security.js";
+import syncEngine from "./sync-engine.js";
 import { startRouter } from "./router.js";
 
 async function bootstrap() {
@@ -9,8 +11,10 @@ async function bootstrap() {
   window.addEventListener("online", updateNetworkStatus);
   window.addEventListener("offline", updateNetworkStatus);
   await registerServiceWorker();
+  await loadApiConfig();
 
   const settings = await initializeDataStore();
+  await syncEngine.init();
   await runLoanInterestMigration();
   updateBrand(settings);
   updateOriginWarning(settings);

@@ -2,9 +2,33 @@ const DEFAULT_API_BASE = "/api";
 
 let apiBase = DEFAULT_API_BASE;
 let apiAvailable = null;
+let apiToken = typeof document !== "undefined"
+  ? document.querySelector('meta[name="x-api-token"]')?.content || ""
+  : "";
+let configPromise = null;
 
 export function configureApiClient(config = {}) {
   apiBase = config.apiBase || window.JEWELLERY_PORTAL_CONFIG?.apiBase || DEFAULT_API_BASE;
+  apiAvailable = null;
+  configPromise = null;
+}
+
+export async function loadApiConfig() {
+  if (configPromise) return configPromise;
+  configPromise = (async () => {
+    try {
+      const response = await fetch(`${apiBase}/config`, { headers: { Accept: "application/json" } });
+      if (!response.ok) return null;
+      const config = await response.json();
+      apiToken = config.apiToken || apiToken || "";
+      const meta = document.querySelector('meta[name="x-api-token"]');
+      if (meta && apiToken) meta.setAttribute("content", apiToken);
+      return config;
+    } catch {
+      return null;
+    }
+  })();
+  return configPromise;
 }
 
 export async function isApiAvailable() {
@@ -12,6 +36,7 @@ export async function isApiAvailable() {
   try {
     const response = await fetch(`${apiBase}/health`, { headers: { Accept: "application/json" } });
     apiAvailable = response.ok;
+    if (apiAvailable) await loadApiConfig();
   } catch {
     apiAvailable = false;
   }
@@ -22,12 +47,15 @@ export function resetApiAvailability() {
   apiAvailable = null;
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, ownerHash = "") {
+  await loadApiConfig();
   const response = await fetch(`${apiBase}${path}`, {
     ...options,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...(apiToken ? { "x-api-token": apiToken } : {}),
+      ...(ownerHash ? { "x-owner-hash": ownerHash } : {}),
       ...(options.headers || {})
     }
   });
@@ -39,36 +67,61 @@ async function request(path, options = {}) {
   return payload;
 }
 
-export function listRecords(storeName) {
-  return request(`/records/${encodeURIComponent(storeName)}`).then((payload) => payload.records || []);
+export function listRecords(storeName, params = "") {
+  const query = params ? `?${params}` : "";
+  return request(`/records/${encodeURIComponent(storeName)}${query}`).then((payload) => payload.records || []);
+}
+
+export function listPaged(storeName, page = 0, pageSize = 50, filters = "") {
+  const offset = page * pageSize;
+  const params = `limit=${pageSize}&offset=${offset}${filters ? `&${filters}` : ""}`;
+  return listRecords(storeName, params);
 }
 
 export function getRecord(storeName, key) {
   return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`).then((payload) => payload.record || null);
 }
 
-export function createRecord(storeName, record) {
+export function createRecord(storeName, record, ownerHash = "") {
   return request(`/records/${encodeURIComponent(storeName)}`, {
     method: "POST",
     body: JSON.stringify({ record })
-  }).then((payload) => payload.record);
+  }, ownerHash).then((payload) => payload.record);
 }
 
-export function saveRecord(storeName, record) {
+export function saveRecord(storeName, record, ownerHash = "") {
   return request(`/records/${encodeURIComponent(storeName)}`, {
     method: "PUT",
     body: JSON.stringify({ record })
-  }).then((payload) => payload.record);
+  }, ownerHash).then((payload) => payload.record);
 }
 
-export function deleteRecord(storeName, key) {
+export function updateRecord(storeName, key, record, ownerHash = "") {
+  return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ record })
+  }, ownerHash).then((payload) => payload.record);
+}
+
+export function deleteRecord(storeName, key, ownerHash = "") {
   return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`, {
     method: "DELETE"
-  }).then((payload) => payload.ok);
+  }, ownerHash).then((payload) => payload.ok);
 }
 
-export function clearRecords(storeName) {
+export function clearRecords(storeName, ownerHash = "") {
   return request(`/records/${encodeURIComponent(storeName)}`, {
     method: "DELETE"
-  }).then((payload) => payload.ok);
+  }, ownerHash).then((payload) => payload.ok);
 }
+
+export const api = {
+  health: () => isApiAvailable(),
+  list: (storeName, params) => listRecords(storeName, params),
+  get: (storeName, key) => getRecord(storeName, key),
+  save: (storeName, record, ownerHash) => saveRecord(storeName, record, ownerHash),
+  update: (storeName, key, record, ownerHash) => updateRecord(storeName, key, record, ownerHash),
+  remove: (storeName, key, ownerHash) => deleteRecord(storeName, key, ownerHash)
+};
+
+export default api;

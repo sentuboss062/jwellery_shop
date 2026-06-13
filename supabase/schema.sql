@@ -124,3 +124,14 @@ create index if not exists stock_lots_metal_type_idx on stock_lots(metal_type);
 create index if not exists stock_movements_ref_id_idx on stock_movements(ref_id);
 create index if not exists credits_bill_no_idx on credits(bill_no);
 create index if not exists loans_customer_mobile_idx on loans(customer_mobile);
+create index if not exists customers_updated_at_idx on customers(updated_at desc);
+create index if not exists bills_updated_at_idx on bills(updated_at desc);
+create index if not exists stock_lots_updated_at_idx on stock_lots(updated_at desc);
+create index if not exists exchange_entries_updated_at_idx on exchange_entries(updated_at desc);
+create index if not exists loans_updated_at_idx on loans(updated_at desc);
+create index if not exists credits_updated_at_idx on credits(updated_at desc);
+create index if not exists audit_log_updated_at_idx on audit_log(updated_at desc);
+
+grant usage on schema public to anon, authenticated, service_role;
+grant all on all tables in schema public to service_role;
+grant select on all tables in schema public to anon;

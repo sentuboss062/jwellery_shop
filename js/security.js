@@ -42,6 +42,11 @@ export async function verifyOwnerPassword(password) {
   return hash === settings.ownerPasswordHash;
 }
 
+export async function getStoredOwnerHash() {
+  const settings = await getSettings();
+  return settings.ownerPasswordHash || "";
+}
+
 export async function ensureOwnerPassword(actionLabel, options = {}) {
   const fields = [
     { name: "password", label: "Owner password", type: "password", required: true }

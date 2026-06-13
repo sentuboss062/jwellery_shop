@@ -1,5 +1,6 @@
 import * as indexedDb from "./db.js";
 import * as api from "./api-client.js";
+import syncEngine from "./sync-engine.js";
 import {
   APP_VERSION,
   STORE_NAMES,
@@ -59,23 +60,33 @@ async function adapterGet(storeName, key) {
 }
 
 async function adapterCreate(storeName, record) {
-  if (await shouldUseApi()) return api.createRecord(storeName, record);
+  if (await shouldUseApi()) return syncEngine.write("save", storeName, record, undefined, await getApiOwnerHash());
   return indexedDb.addRecord(storeName, record);
 }
 
 async function adapterSave(storeName, record) {
-  if (await shouldUseApi()) return api.saveRecord(storeName, record);
+  if (await shouldUseApi()) return syncEngine.write("save", storeName, record, undefined, await getApiOwnerHash());
   return indexedDb.putRecord(storeName, record);
 }
 
 async function adapterDelete(storeName, key) {
-  if (await shouldUseApi()) return api.deleteRecord(storeName, key);
+  if (await shouldUseApi()) return syncEngine.write("remove", storeName, key, undefined, await getApiOwnerHash());
   return indexedDb.deleteRecord(storeName, key);
 }
 
 async function adapterClear(storeName) {
-  if (await shouldUseApi()) return api.clearRecords(storeName);
+  if (await shouldUseApi()) throw new Error("Full-store clear is disabled for the backend API. Restore into IndexedDB fallback or delete individual records.");
   return indexedDb.clearStore(storeName);
+}
+
+async function getApiOwnerHash() {
+  if (!(await shouldUseApi())) return "";
+  try {
+    const settings = await api.getRecord("shopSettings", "main");
+    return settings?.ownerPasswordHash || settings?.owner_pw_hash || "";
+  } catch {
+    return "";
+  }
 }
 
 export function isBackendActive() {
