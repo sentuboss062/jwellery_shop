@@ -68,8 +68,8 @@ async function request(path, options = {}, ownerHash = "") {
 }
 
 export function listRecords(storeName, params = "") {
-  const query = params ? `?${params}` : "";
-  return request(`/records/${encodeURIComponent(storeName)}${query}`).then((payload) => payload.records || []);
+  const query = recordQuery(storeName, "", params);
+  return request(`/records?${query}`).then((payload) => payload.records || []);
 }
 
 export function listPaged(storeName, page = 0, pageSize = 50, filters = "") {
@@ -79,40 +79,47 @@ export function listPaged(storeName, page = 0, pageSize = 50, filters = "") {
 }
 
 export function getRecord(storeName, key) {
-  return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`).then((payload) => payload.record || null);
+  return request(`/records?${recordQuery(storeName, key)}`).then((payload) => payload.record || null);
 }
 
 export function createRecord(storeName, record, ownerHash = "") {
-  return request(`/records/${encodeURIComponent(storeName)}`, {
+  return request(`/records?${recordQuery(storeName)}`, {
     method: "POST",
     body: JSON.stringify({ record })
   }, ownerHash).then((payload) => payload.record);
 }
 
 export function saveRecord(storeName, record, ownerHash = "") {
-  return request(`/records/${encodeURIComponent(storeName)}`, {
+  return request(`/records?${recordQuery(storeName)}`, {
     method: "PUT",
     body: JSON.stringify({ record })
   }, ownerHash).then((payload) => payload.record);
 }
 
 export function updateRecord(storeName, key, record, ownerHash = "") {
-  return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`, {
+  return request(`/records?${recordQuery(storeName, key)}`, {
     method: "PATCH",
     body: JSON.stringify({ record })
   }, ownerHash).then((payload) => payload.record);
 }
 
 export function deleteRecord(storeName, key, ownerHash = "") {
-  return request(`/records/${encodeURIComponent(storeName)}/${encodeURIComponent(key)}`, {
+  return request(`/records?${recordQuery(storeName, key)}`, {
     method: "DELETE"
   }, ownerHash).then((payload) => payload.ok);
 }
 
 export function clearRecords(storeName, ownerHash = "") {
-  return request(`/records/${encodeURIComponent(storeName)}`, {
+  return request(`/records?${recordQuery(storeName)}`, {
     method: "DELETE"
   }, ownerHash).then((payload) => payload.ok);
+}
+
+function recordQuery(storeName, key = "", extra = "") {
+  const params = new URLSearchParams(extra || "");
+  params.set("store", storeName);
+  if (key) params.set("key", key);
+  return params.toString();
 }
 
 export const api = {

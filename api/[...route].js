@@ -84,10 +84,11 @@ export default async function handler(req, res) {
 }
 
 async function handleRecordRoute(req, res, path) {
-  const storeName = path[1];
+  const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
+  const storeName = path[1] || url.searchParams.get("store");
   const store = STORE_TABLES[storeName];
   if (!store) return sendJson(res, 400, { error: `Unsupported store: ${storeName}` });
-  const key = path[2] ? decodeURIComponent(path[2]) : "";
+  const key = path[2] ? decodeURIComponent(path[2]) : url.searchParams.get("key") || "";
 
   if (req.method === "DELETE") {
     if (!key) return sendJson(res, 405, { error: "DELETE without an id is not allowed" });
@@ -152,6 +153,8 @@ function getPathParts(req) {
 function listQuery(req) {
   const url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
   const params = url.searchParams;
+  params.delete("store");
+  params.delete("key");
   if (!params.has("limit")) params.set("limit", "100");
   if (!params.has("order")) params.set("order", "updated_at.desc");
   const limit = Math.min(Math.max(Number(params.get("limit") || 100), 1), 500);
