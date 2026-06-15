@@ -1,0 +1,9 @@
+{
+  "name": "jwellery-shop",
+  "version": "1.3.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo \"No build step required for this static app\""
+  }
+}
