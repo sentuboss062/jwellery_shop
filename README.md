@@ -58,7 +58,13 @@ Security notes:
 - Full-store backend deletes are blocked.
 - Basic in-memory rate limiting is enabled for the Vercel API.
 
-Backend tables include: `shops_settings`, `app_users`, `customers`, `bills`, `bill_items`, `legacy_gold_bills`, `legacy_silver_bills`, `stock_lots`, `stock_movements`, `exchange_entries`, `credits`, `credit_payments`, `loans`, `loan_payments`, `rates`, `audit_log`, and `backup_meta`.
+Backend tables include: `shops`, `shop_users`, `shops_settings`, `app_users`, `customers`, `bills`, `bill_items`, `legacy_gold_bills`, `legacy_silver_bills`, `stock_lots`, `stock_movements`, `exchange_entries`, `credits`, `credit_payments`, `loans`, `loan_payments`, `rates`, `audit_log`, `backup_meta`, and `cloud_backups`.
+
+## Shop Mode
+
+This version is configured for one shop. The app always uses the internal shop ID `main`, so records do not disappear because of a shop selector or shop ID mismatch.
+
+The backend schema keeps `shops`, `shop_users`, and `shop_id` fields so the project can be upgraded to multi-shop later, but the shopkeeper-facing multi-shop controls are intentionally hidden in this version.
 
 ## Vercel Deployment
 
@@ -103,6 +109,8 @@ Individual PDFs are downloaded by the browser. The app does not claim to write r
 
 Restore requires the owner password. The app downloads a pre-restore ZIP backup first, validates database version, imports JSON stores, and shows imported counts.
 
+The Backup / Restore screen also includes **Create Cloud Backup**. This saves a full JSON snapshot directly in the Supabase `cloud_backups` table and records metadata in `backup_meta`. Run the latest `supabase/schema.sql` before using it on an existing Supabase project.
+
 ## Owner Password
 
 The owner password is local-only protection for destructive actions. It is hashed with a salt using the browser Web Crypto API. The plain password is never stored. This is not server-grade authentication.
@@ -130,6 +138,6 @@ Owner password is required for bill cancel, saved bill edit, stock delete, close
 ## Future Paid Features Excluded From This Version
 
 - *** live bullion-rate auto-fetch integration
-- *** cloud sync / multi-device shared database
+- *** full Supabase Auth multi-user login with role management
 - *** OTP / SMS / email verification
 - *** platform host-level site-wide password protection

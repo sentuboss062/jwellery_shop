@@ -6,12 +6,32 @@ create table if not exists shops_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists shops (
+  shop_id text primary key,
+  shop_name text not null,
+  owner_label text,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists shop_users (
+  user_id text not null,
+  shop_id text not null references shops(shop_id) on delete cascade,
+  role text not null default 'owner',
+  display_name text,
+  created_at timestamptz not null default now(),
+  primary key (user_id, shop_id)
+);
+
 create table if not exists customers (
   customer_id text primary key,
-  mobile text unique,
+  mobile text,
   payload jsonb not null,
   updated_at timestamptz not null default now()
 );
+
+alter table customers drop constraint if exists customers_mobile_key;
 
 create table if not exists bills (
   bill_no text primary key,
@@ -109,6 +129,17 @@ create table if not exists backup_meta (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists cloud_backups (
+  backup_id text primary key,
+  shop_id text not null default 'main',
+  file_name text not null,
+  created_at timestamptz not null default now(),
+  record_counts jsonb not null default '{}'::jsonb,
+  app_version text,
+  origin_at_export text,
+  payload jsonb not null
+);
+
 create table if not exists app_users (
   user_id uuid primary key default gen_random_uuid(),
   display_name text not null,
@@ -125,12 +156,14 @@ create index if not exists stock_movements_ref_id_idx on stock_movements(ref_id)
 create index if not exists credits_bill_no_idx on credits(bill_no);
 create index if not exists loans_customer_mobile_idx on loans(customer_mobile);
 create index if not exists customers_updated_at_idx on customers(updated_at desc);
+create index if not exists customers_mobile_idx on customers(mobile);
 create index if not exists bills_updated_at_idx on bills(updated_at desc);
 create index if not exists stock_lots_updated_at_idx on stock_lots(updated_at desc);
 create index if not exists exchange_entries_updated_at_idx on exchange_entries(updated_at desc);
 create index if not exists loans_updated_at_idx on loans(updated_at desc);
 create index if not exists credits_updated_at_idx on credits(updated_at desc);
 create index if not exists audit_log_updated_at_idx on audit_log(updated_at desc);
+create index if not exists cloud_backups_shop_created_idx on cloud_backups(shop_id, created_at desc);
 
 grant usage on schema public to anon, authenticated, service_role;
 grant all on all tables in schema public to service_role;

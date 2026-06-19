@@ -37,9 +37,28 @@ const KEY_PATHS = {
 };
 
 let useApi = false;
+const SETTINGS_STORE = "shopSettings";
 
 async function shouldUseApi() {
   return useApi;
+}
+
+export function getActiveShopId() {
+  return api.getActiveShopId();
+}
+
+export function setActiveShopId(shopId) {
+  return api.setActiveShopId(shopId);
+}
+
+function withShop(record) {
+  if (!record || typeof record !== "object") return record;
+  return { ...record, shopId: getActiveShopId() };
+}
+
+function belongsToActiveShop(record) {
+  const shopId = getActiveShopId();
+  return !record?.shopId || record.shopId === shopId;
 }
 
 export async function initializeDataStore() {
@@ -50,23 +69,26 @@ export async function initializeDataStore() {
 }
 
 async function adapterList(storeName) {
-  if (await shouldUseApi()) return api.listRecords(storeName);
-  return indexedDb.getAll(storeName);
+  const records = await ((await shouldUseApi()) ? api.listRecords(storeName) : indexedDb.getAll(storeName));
+  return storeName === SETTINGS_STORE ? records : records.filter(belongsToActiveShop);
 }
 
 async function adapterGet(storeName, key) {
-  if (await shouldUseApi()) return api.getRecord(storeName, key);
-  return indexedDb.getByKey(storeName, key);
+  const record = await ((await shouldUseApi()) ? api.getRecord(storeName, key) : indexedDb.getByKey(storeName, key));
+  if (!record || storeName === SETTINGS_STORE || belongsToActiveShop(record)) return record;
+  return null;
 }
 
 async function adapterCreate(storeName, record) {
-  if (await shouldUseApi()) return syncEngine.write("save", storeName, record, undefined, await getApiOwnerHash());
-  return indexedDb.addRecord(storeName, record);
+  const next = withShop(record);
+  if (await shouldUseApi()) return syncEngine.write("save", storeName, next, undefined, await getApiOwnerHash());
+  return indexedDb.addRecord(storeName, next);
 }
 
 async function adapterSave(storeName, record) {
-  if (await shouldUseApi()) return syncEngine.write("save", storeName, record, undefined, await getApiOwnerHash());
-  return indexedDb.putRecord(storeName, record);
+  const next = withShop(record);
+  if (await shouldUseApi()) return syncEngine.write("save", storeName, next, undefined, await getApiOwnerHash());
+  return indexedDb.putRecord(storeName, next);
 }
 
 async function adapterDelete(storeName, key) {

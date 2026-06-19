@@ -24,7 +24,7 @@ import {
   saveRate,
   updateSettings
 } from "../data-service.js";
-import { exportFullZip, exportJsonOnly, restoreBackupFromFile } from "../backup.js";
+import { createSupabaseCloudBackup, exportFullZip, exportJsonOnly, getSupabaseCloudBackups, restoreBackupFromFile } from "../backup.js";
 import { requestPersistentStorage, getStorageHealth, renderStorageCard } from "../storage-health.js";
 import { ensureOwnerPassword, setOwnerPassword } from "../security.js";
 
@@ -42,7 +42,7 @@ export async function render(container) {
         <div class="section-header">
           <div>
             <h2>Shop Settings</h2>
-            <p>Basic bill details, local owner password, and print footer.</p>
+            <p>Basic bill details, owner password, and print footer.</p>
           </div>
         </div>
         <form id="settings-form" class="page-grid">
@@ -250,7 +250,7 @@ export async function renderRates(container) {
 }
 
 export async function renderBackup(container) {
-  const [settings, health] = await Promise.all([getSettings(), getStorageHealth()]);
+  const [settings, health, cloudBackups] = await Promise.all([getSettings(), getStorageHealth(), getSupabaseCloudBackups()]);
   const originMismatch = settings.productionOrigin && settings.productionOrigin !== location.origin;
   container.innerHTML = `
     <div class="page-grid">
@@ -259,7 +259,7 @@ export async function renderBackup(container) {
         <div class="section-header">
           <div>
             <h2>Backup / Restore</h2>
-            <p>Export regular ZIP backups. Restore replaces browser-local data after owner approval.</p>
+            <p>Export local ZIP backups or save a full JSON snapshot directly in Supabase.</p>
           </div>
         </div>
         <div class="notice warning">
@@ -271,6 +271,7 @@ export async function renderBackup(container) {
           <div class="metric-card"><small>Current origin</small><strong>${escapeHtml(location.origin)}</strong><span>Exported in manifest</span></div>
         </div>
         <div class="actions-row">
+          <button class="button" type="button" data-cloud-backup>Create Cloud Backup</button>
           <button class="button" type="button" data-export-zip>Export Full ZIP</button>
           <button class="button-secondary" type="button" data-export-json>Export JSON Only</button>
           <label class="button-danger">
@@ -281,8 +282,30 @@ export async function renderBackup(container) {
         </div>
         <div id="restore-summary"></div>
       </section>
+      <section class="section-band">
+        <div class="section-header">
+          <div>
+            <h2>Supabase Cloud Backups</h2>
+            <p>Recent database-saved snapshots.</p>
+          </div>
+        </div>
+        ${renderTable([
+          { label: "Created", render: (row) => formatDateTime(row.created_at || row.createdAt) },
+          { label: "File", render: (row) => escapeHtml(row.file_name || row.fileName || "-") },
+          { label: "Records", render: (row) => escapeHtml(Object.entries(row.record_counts || row.recordCounts || {}).map(([key, value]) => `${key}: ${value}`).join(", ") || "-") },
+          { label: "Version", render: (row) => escapeHtml(row.app_version || row.appVersion || "-") }
+        ], cloudBackups, "No cloud backups saved for this shop yet.")}
+      </section>
     </div>
   `;
+  $("[data-cloud-backup]", container).addEventListener("click", async () => {
+    try {
+      await createSupabaseCloudBackup();
+      await renderBackup(container);
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
   $("[data-export-zip]", container).addEventListener("click", async () => {
     try {
       await exportFullZip();
